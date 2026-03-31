@@ -1,5 +1,5 @@
 import logging
-from ..utils.command_runner import run_powershell
+from app.utils.command_runner import run_powershell
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

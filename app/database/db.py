@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from contextlib import contextmanager
 
-from ..config import settings
+from app.config import settings
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

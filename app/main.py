@@ -2,10 +2,10 @@ import sys
 import os
 import argparse
 import logging
-from .utils import admin, logger
-from .database import db
-from .gui import App
-from .config import settings
+from app.utils import admin, logger, file_utils
+from app.database import db
+from app.gui import App
+from app.config import settings
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Windows Provisioning Assistant v2")
@@ -15,10 +15,10 @@ def parse_args():
 
 def handle_silent_mode(args):
     """Executa o provisionamento em modo silencioso baseado em um perfil."""
-    from .modules.provisioning_pipeline import ProvisioningPipeline
-    from .modules.task_registry import get_available_tasks
+    from app.modules.provisioning_pipeline import ProvisioningPipeline
+    from app.modules.task_registry import get_available_tasks
     
-    profiles = db.load_json(settings.PROFILES_PATH)
+    profiles = file_utils.load_json(settings.PROFILES_PATH)
     profile_name = args.profile
     
     if profile_name not in profiles:
@@ -44,7 +44,7 @@ def main():
     log.info(f"{settings.APP_NAME} v{settings.APP_VERSION} iniciando...")
     
     # 2. Verificar Admin
-    is_admin = admin.is_user_admin()
+    is_admin = admin.is_admin()
     if not is_admin:
         log.warning("Sem privilégios de Administrador. Tentando elevar...")
         if admin.run_as_admin():

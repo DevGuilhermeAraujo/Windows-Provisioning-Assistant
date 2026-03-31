@@ -8,9 +8,9 @@ import time
 from datetime import datetime
 from typing import List, Dict, Any, Callable
 
-from .task_registry import get_task_function
-from ..database import db
-from ..utils import system_info
+from app.modules.task_registry import get_task_function
+from app.database import db
+from app.utils import system_info
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

@@ -7,12 +7,12 @@ import os
 from datetime import datetime
 
 # Imports internos
-from .config import settings
-from .utils import system_info, ip_scanner, admin, file_utils
-from .database import db
-from .reports import report_generator, report_templates
-from .modules.provisioning_pipeline import ProvisioningPipeline
-from .modules.task_registry import get_available_tasks
+from app.config import settings
+from app.utils import system_info, ip_scanner, admin, file_utils
+from app.database import db
+from app.reports import report_generator, report_templates
+from app.modules.provisioning_pipeline import ProvisioningPipeline
+from app.modules.task_registry import get_available_tasks
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
@@ -311,7 +311,7 @@ class DomainFrame(ctk.CTkFrame):
             messagebox.showwarning("Aviso", "Preencha todos os campos do domínio.")
             return
 
-        from .services.domain_service import join_domain
+        from app.services.domain_service import join_domain
         self.controller.update_log(f"Iniciando tentativa de ingressar em {domain}...")
         
         def run():
@@ -349,7 +349,7 @@ class SoftwareFrame(ctk.CTkFrame):
             return
             
         self.btn_install.configure(state="disabled")
-        from .services.software_installer import install_multiple
+        from app.services.software_installer import install_multiple
         
         def run():
             res = install_multiple(to_install)
@@ -387,7 +387,7 @@ class SecurityFrame(ctk.CTkFrame):
         ctk.CTkButton(bl_box, text="Criptografar", width=120, command=lambda: self.run_task("bitlocker")).pack(side="right", padx=10)
 
     def run_task(self, task_id):
-        from .modules.task_registry import get_task_function
+        from app.modules.task_registry import get_task_function
         func = get_task_function(task_id)
         if func:
             threading.Thread(target=lambda: self.after(0, lambda: messagebox.showinfo("Task", func()["message"])), daemon=True).start()

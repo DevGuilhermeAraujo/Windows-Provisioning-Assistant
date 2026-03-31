@@ -3,8 +3,8 @@ import csv
 import os
 import logging
 from datetime import datetime
-from ..utils import system_info, file_utils
-from ..config import settings
+from app.utils import system_info, file_utils
+from app.config import settings
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
@@ -69,7 +69,7 @@ def generate_full_report(pipeline_results: dict, output_format: str = "json"):
 
 def export_db_history_to_csv():
     """Exporta todo o histórico do SQLite para um arquivo CSV para auditoria."""
-    from ..database import db
+    from app.database import db
     executions = db.get_all_executions()
     
     filepath = file_utils.timestamped_filename("history_audit", "csv", settings.EXPORTS_DIR)

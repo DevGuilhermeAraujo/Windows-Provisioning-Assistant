@@ -1,6 +1,6 @@
 import logging
-from ..utils.command_runner import run_powershell
-from ..utils.validators import validate_domain
+from app.utils.command_runner import run_powershell
+from app.utils.validators import validate_domain
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

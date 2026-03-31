@@ -1,8 +1,8 @@
 """Serviço de acesso remoto — habilita RDP e configura regras de firewall."""
 
 import logging
-from ..utils.command_runner import run_powershell
-from .firewall_service import allow_rdp_rule
+from app.utils.command_runner import run_powershell
+from app.services.firewall_service import allow_rdp_rule
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

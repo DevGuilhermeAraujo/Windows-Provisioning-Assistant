@@ -1,8 +1,8 @@
 """Serviço de instalação de softwares via winget."""
 
 import logging
-from ..utils.command_runner import run_powershell
-from ..config import settings
+from app.utils.command_runner import run_powershell
+from app.config import settings
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 

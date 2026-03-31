@@ -3,7 +3,7 @@ Registro central de todas as tarefas de provisionamento disponíveis.
 Mapeia identificadores de tarefas para as funções dos serviços correspondentes.
 """
 
-from ..services import (
+from app.services import (
     hostname_service,
     network_service,
     domain_service,

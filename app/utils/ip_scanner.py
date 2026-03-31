@@ -10,7 +10,7 @@ import logging
 import concurrent.futures
 from typing import List, Dict
 
-from ..config import settings
+from app.config import settings
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
