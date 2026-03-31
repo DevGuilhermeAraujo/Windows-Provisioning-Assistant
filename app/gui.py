@@ -40,6 +40,7 @@ class App(ctk.CTk):
         self.execution_history = []
         self.selected_tasks = []
         self.profiles = file_utils.load_json(settings.PROFILES_PATH)
+        self.software_state = {name: False for name in settings.WINGET_PACKAGES.keys()} 
 
     def create_layout(self):
         """Cria os componentes principais: Banner, Sidebar e Main Content."""
@@ -125,6 +126,13 @@ class App(ctk.CTk):
         self.log_area.see("end")
         self.log_area.configure(state="disabled")
 
+    def get_frame(self, name):
+        """Busca um frame específico se ele estiver ativo (não recomendado usar em produção, mas útil para o protótipo)."""
+        # Como limpamos o frame no select_frame, só conseguiremos acessar o ATUAL.
+        # Numa App real, os frames deveriam ser persistentes ou o estado ser centralizado no controller.
+        # Para este caso, vamos garantir que State seja acessado.
+        return self.current_frame if hasattr(self.current_frame, '__class__') and self.current_frame.__class__.__name__.lower().startswith(name) else None
+
 # --- CLASSES DE FRAMES (ABAS) ---
 
 class DashboardFrame(ctk.CTkFrame):
@@ -162,45 +170,88 @@ class DashboardFrame(ctk.CTkFrame):
         ctk.CTkLabel(card_hw, text=f"RAM: {info['ram_gb']} GB", text_color=settings.TEXT_MUTED).pack()
         ctk.CTkLabel(card_hw, text=f"Rede: {info['ip']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
+class TaskItem(ctk.CTkFrame):
+    """Componente para cada item da lista de provisionamento (Accordion)."""
+    def __init__(self, parent, task_id, label, has_inputs=False):
+        super().__init__(parent, fg_color="transparent")
+        self.task_id = task_id
+        self.has_inputs = has_inputs
+        self.expanded = False
+        
+        # Grid layout
+        self.grid_columnconfigure(1, weight=1)
+        
+        # Checkbox
+        self.var = tk.BooleanVar(value=True)
+        self.check = ctk.CTkCheckBox(self, text=label, variable=self.var, font=ctk.CTkFont(weight="bold"))
+        self.check.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        
+        # Botão de Expansão (Seta)
+        if has_inputs:
+            self.btn_expand = ctk.CTkButton(self, text="▼", width=30, fg_color="transparent", 
+                                           hover_color=settings.BG_CARD, command=self.toggle)
+            self.btn_expand.grid(row=0, column=2, padx=10, pady=10, sticky="e")
+            
+            # Frame de Inputs (Escondido por padrão)
+            self.input_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+            # Não damos grid ainda
+            self.inputs = {} 
+        else:
+            ctk.CTkLabel(self, text="").grid(row=0, column=2, padx=10)
+
+    def toggle(self):
+        if not self.expanded:
+            self.input_frame.grid(row=1, column=0, columnspan=3, padx=30, pady=(0, 10), sticky="ew")
+            self.btn_expand.configure(text="▲")
+        else:
+            self.input_frame.grid_forget()
+            self.btn_expand.configure(text="▼")
+        self.expanded = not self.expanded
+
+    def add_input(self, key, label, placeholder=""):
+        row = len(self.inputs)
+        ctk.CTkLabel(self.input_frame, text=label).grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        entry = ctk.CTkEntry(self.input_frame, placeholder_text=placeholder, width=200)
+        entry.grid(row=row, column=1, padx=10, pady=5, sticky="ew")
+        self.inputs[key] = entry
+        self.input_frame.grid_columnconfigure(1, weight=1)
+
+    def get_params(self):
+        return {k: v.get() for k, v in self.inputs.items()}
+
 class ProvisioningFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
         super().__init__(parent, fg_color="transparent")
         self.controller = controller
         self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
         self.create_widgets()
 
     def create_widgets(self):
-        ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
         
-        # Grid para inputs de configuração
-        input_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
-        input_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        input_frame.grid_columnconfigure((1, 3), weight=1)
-
-        ctk.CTkLabel(input_frame, text="Novo Hostname:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
-        self.entry_hostname = ctk.CTkEntry(input_frame, placeholder_text="Ex: PC-VENDAS-01")
-        self.entry_hostname.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-
-        ctk.CTkLabel(input_frame, text="IP Estático:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
-        self.entry_ip = ctk.CTkEntry(input_frame, placeholder_text="192.168.1.50")
-        self.entry_ip.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
-
-        ctk.CTkLabel(input_frame, text="Máscara:").grid(row=1, column=2, padx=10, pady=10, sticky="e")
-        self.entry_mask = ctk.CTkEntry(input_frame, placeholder_text="255.255.255.0")
-        self.entry_mask.grid(row=1, column=3, padx=10, pady=10, sticky="ew")
-
-        ctk.CTkLabel(input_frame, text="Gateway:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
-        self.entry_gw = ctk.CTkEntry(input_frame, placeholder_text="192.168.1.1")
-        self.entry_gw.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
-
-        # Checklist de tarefas
-        self.scroll = ctk.CTkScrollableFrame(self, height=300)
-        self.scroll.grid(row=2, column=0, sticky="nsew", pady=10)
+        # Checklist de tarefas (Accordion)
+        self.scroll = ctk.CTkScrollableFrame(self)
+        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
         
-        self.task_vars = {}
-        tasks = [
-            ("hostname", "Alterar Hostname"),
-            ("static_ip", "Configurar IP Fixo"),
+        self.items = {}
+        
+        # 1. Hostname
+        item_h = TaskItem(self.scroll, "hostname", "Alterar Hostname", has_inputs=True)
+        item_h.add_input("new_name", "Novo Nome:", "Ex: PC-VENDAS-01")
+        item_h.pack(fill="x", pady=2)
+        self.items["hostname"] = item_h
+        
+        # 2. Rede
+        item_net = TaskItem(self.scroll, "static_ip", "Configurar IP Fixo", has_inputs=True)
+        item_net.add_input("ip", "Endereço IP:", "192.168.1.50")
+        item_net.add_input("mask", "Máscara:", "255.255.255.0")
+        item_net.add_input("gateway", "Gateway:", "192.168.1.1")
+        item_net.pack(fill="x", pady=2)
+        self.items["static_ip"] = item_net
+        
+        # Outras tasks simples
+        simple_tasks = [
             ("time_sync", "Sincronizar NTP"),
             ("perf_plan", "Plano de Alta Performance"),
             ("firewall_on", "Ativar Firewall"),
@@ -209,43 +260,40 @@ class ProvisioningFrame(ctk.CTkFrame):
             ("cleanup", "Limpeza de Sistema")
         ]
         
-        for task_id, label in tasks:
-            var = tk.BooleanVar(value=True)
-            ctk.CTkCheckBox(self.scroll, text=label, variable=var).pack(anchor="w", padx=20, pady=5)
-            self.task_vars[task_id] = var
+        for tid, label in simple_tasks:
+            item = TaskItem(self.scroll, tid, label)
+            item.pack(fill="x", pady=2)
+            self.items[tid] = item
 
         self.btn_run = ctk.CTkButton(self, text="🚀 Executar Provisionamento", height=45, fg_color=settings.ACCENT_COLOR, command=self.run_pipeline)
-        self.btn_run.grid(row=3, column=0, pady=20)
+        self.btn_run.grid(row=2, column=0, pady=20)
         
         self.progress = ctk.CTkProgressBar(self)
-        self.progress.grid(row=4, column=0, sticky="ew", pady=10)
+        self.progress.grid(row=3, column=0, sticky="ew", pady=10)
         self.progress.set(0)
 
     def run_pipeline(self):
-        # Capturar parâmetros da UI
-        h_name = self.entry_hostname.get()
-        s_ip = self.entry_ip.get()
-        s_mask = self.entry_mask.get()
-        s_gw = self.entry_gw.get()
-        
         selected = []
-        for tid, var in self.task_vars.items():
-            if var.get():
-                task_item = {"id": tid, "params": {}}
-                # Preencher parâmetros baseado no ID da task
-                if tid == "hostname":
-                    task_item["params"] = {"new_name": h_name}
-                elif tid == "static_ip":
+        for tid, item in self.items.items():
+            if item.var.get():
+                params = item.get_params()
+                
+                # Regras especiais de parâmetros
+                if tid == "static_ip":
                     # Detectar adaptador automaticamente
                     from app.services.network_service import run_powershell
                     res = run_powershell("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name")
-                    adapter = res["output"] if res["success"] else "Ethernet"
-                    task_item["params"] = {"adapter_name": adapter, "ip": s_ip, "mask": s_mask, "gateway": s_gw}
-                elif tid == "install_apps":
-                    # Pega todos os apps selecionados na outra aba (ou um padrão)
-                    task_item["params"] = {"packages": list(settings.WINGET_PACKAGES.keys())}
+                    params["adapter_name"] = res["output"] if res["success"] else "Ethernet"
                 
-                selected.append(task_item)
+                elif tid == "install_apps":
+                    # Pega exatamente o que foi marcado na aba lateral de Softwares
+                    params["packages"] = [name for name, selected_sw in self.controller.software_state.items() if selected_sw]
+                
+                selected.append({"id": tid, "params": params})
+
+        if not selected:
+            messagebox.showwarning("Aviso", "Selecione ao menos uma tarefa.")
+            return
 
         self.btn_run.configure(state="disabled")
         
@@ -391,12 +439,21 @@ class SoftwareFrame(ctk.CTkFrame):
         
         self.sw_vars = {}
         for name in settings.WINGET_PACKAGES.keys():
-            var = tk.BooleanVar()
-            ctk.CTkCheckBox(self.scroll, text=name, variable=var).pack(anchor="w", padx=20, pady=5)
+            # Carregar estado persistente do controller
+            initial_val = self.controller.software_state.get(name, False)
+            var = tk.BooleanVar(value=initial_val)
+            
+            cb = ctk.CTkCheckBox(self.scroll, text=name, variable=var, 
+                                 command=lambda n=name, v=var: self.save_state(n, v))
+            cb.pack(anchor="w", padx=20, pady=5)
             self.sw_vars[name] = var
 
         self.btn_install = ctk.CTkButton(self, text="📦 Instalar Selecionados", command=self.install_sw)
         self.btn_install.grid(row=2, column=0, pady=20)
+
+    def save_state(self, name, var):
+        """Salva o estado no controller para não perder ao trocar de aba."""
+        self.controller.software_state[name] = var.get()
 
     def install_sw(self):
         to_install = [name for name, var in self.sw_vars.items() if var.get()]

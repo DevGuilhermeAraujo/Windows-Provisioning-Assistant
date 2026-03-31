@@ -48,8 +48,9 @@ class ProvisioningPipeline:
         
         for i, task_info in enumerate(task_list):
             task_id = task_info.get("id")
+            params = task_info.get("params", {})
+            kwargs = task_info.get("kwargs", params) # Se kwargs não existir, usa params
             args = task_info.get("args", [])
-            kwargs = task_info.get("kwargs", {})
             
             task_func = get_task_function(task_id)
             
