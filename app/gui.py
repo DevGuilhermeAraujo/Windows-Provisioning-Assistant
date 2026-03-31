@@ -493,25 +493,94 @@ class SecurityFrame(ctk.CTkFrame):
         self.create_widgets()
 
     def create_widgets(self):
-        ctk.CTkLabel(self, text="Segurança & Usuários", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        ctk.CTkLabel(self, text="Segurança do Sistema", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
         
-        # Firewall
-        fw_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
-        fw_box.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(fw_box, text="Firewall do Windows", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
-        ctk.CTkButton(fw_box, text="Ativar Firewall", width=120, command=lambda: self.run_task("firewall_on")).pack(side="right", padx=10)
+        # 1. Microsoft Defender
+        def_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        def_box.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        def_box.grid_columnconfigure(1, weight=1)
         
-        # RDP
-        rdp_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
-        rdp_box.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(rdp_box, text="Acesso Remoto (RDP)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
-        ctk.CTkButton(rdp_box, text="Habilitar RDP", width=120, command=lambda: self.run_task("rdp_on")).pack(side="right", padx=10)
+        ctk.CTkLabel(def_box, text="🛡️ Microsoft Defender", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, padx=20, pady=15, sticky="w")
+        
+        self.lbl_def_status = ctk.CTkLabel(def_box, text="Verificando status...", text_color=settings.TEXT_MUTED)
+        self.lbl_def_status.grid(row=0, column=1, padx=20, pady=15, sticky="e")
+        
+        btn_def_frame = ctk.CTkFrame(def_box, fg_color="transparent")
+        btn_def_frame.grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 15), sticky="ew")
+        
+        ctk.CTkButton(btn_def_frame, text="Atualizar Definições", command=self.update_defender_signatures, width=150).pack(side="left", padx=5)
+        ctk.CTkButton(btn_def_frame, text="Verificação Rápida", command=self.run_defender_scan, width=150).pack(side="left", padx=5)
 
-        # BitLocker
-        bl_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
-        bl_box.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
-        ctk.CTkLabel(bl_box, text="BitLocker (C:)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
-        ctk.CTkButton(bl_box, text="Criptografar", width=120, command=lambda: self.run_task("bitlocker")).pack(side="right", padx=10)
+        # 2. Firewall do Windows (Granular)
+        fw_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        fw_box.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        
+        ctk.CTkLabel(fw_box, text="🔥 Firewall do Windows", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
+        
+        profiles = [("Domain", "🌐 Domínio"), ("Private", "🏠 Privada"), ("Public", "📋 Pública")]
+        self.fw_switches = {}
+        
+        for pid, label in profiles:
+            f = ctk.CTkFrame(fw_box, fg_color="transparent")
+            f.pack(fill="x", padx=20, pady=5)
+            ctk.CTkLabel(f, text=label).pack(side="left")
+            
+            btn_off = ctk.CTkButton(f, text="Desativar", width=80, fg_color="#c0392b", hover_color="#a93226", 
+                                   command=lambda p=pid: self.toggle_fw(p, False))
+            btn_off.pack(side="right", padx=5)
+            
+            btn_on = ctk.CTkButton(f, text="Ativar", width=80, fg_color="#27ae60", hover_color="#229954",
+                                  command=lambda p=pid: self.toggle_fw(p, True))
+            btn_on.pack(side="right", padx=5)
+
+        # 3. Acesso Remoto e Outros
+        extra_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        extra_box.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        
+        ctk.CTkLabel(extra_box, text="Acesso Remoto (RDP)").pack(side="left", padx=20, pady=20)
+        ctk.CTkButton(extra_box, text="Habilitar RDP", width=120, command=lambda: self.run_task("rdp_on")).pack(side="right", padx=20)
+
+        # Inicia atualização de status
+        self.update_status_loop()
+
+    def update_status_loop(self):
+        """Atualiza os indicadores de status na interface."""
+        from app.services.defender_service import get_defender_status
+        status = get_defender_status()
+        if status and self.winfo_exists():
+            enabled = status.get("RealTimeProtectionEnabled", False)
+            text = "PROTEÇÃO ATIVA" if enabled else "PROTEÇÃO DESATIVADA"
+            color = settings.SUCCESS_COLOR if enabled else settings.ERROR_COLOR
+            self.lbl_def_status.configure(text=text, text_color=color)
+        
+        if self.winfo_exists():
+            self.after(10000, self.update_status_loop) # Atualiza a cada 10s
+
+    def toggle_fw(self, profile, enabled):
+        from app.services.firewall_service import set_firewall_profile_status
+        def run():
+            res = set_firewall_profile_status(profile, enabled)
+            if self.winfo_exists():
+                self.after(0, lambda: messagebox.showinfo("Firewall", res["message"]))
+        threading.Thread(target=run, daemon=True).start()
+
+    def update_defender_signatures(self):
+        from app.services.defender_service import update_defender
+        def run():
+            self.controller.update_log("Atualizando definições do Defender...")
+            res = update_defender()
+            if self.winfo_exists():
+                self.after(0, lambda: messagebox.showinfo("Defender", res["message"]))
+        threading.Thread(target=run, daemon=True).start()
+
+    def run_defender_scan(self):
+        from app.services.defender_service import run_quick_scan
+        def run():
+            self.controller.update_log("Iniciando verificação rápida do Defender...")
+            res = run_quick_scan()
+            if self.winfo_exists():
+                self.after(0, lambda: messagebox.showinfo("Defender", res["message"]))
+        threading.Thread(target=run, daemon=True).start()
 
     def run_task(self, task_id):
         from app.modules.task_registry import get_task_function
@@ -520,7 +589,7 @@ class SecurityFrame(ctk.CTkFrame):
             def run():
                 res = func()
                 if self.winfo_exists():
-                    self.after(0, lambda: messagebox.showinfo("Task", res["message"]))
+                    self.after(0, lambda: messagebox.showinfo("Segurança", res["message"]))
             threading.Thread(target=run, daemon=True).start()
 
 class ReportFrame(ctk.CTkFrame):

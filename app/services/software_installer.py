@@ -29,7 +29,7 @@ def install_software(package_id: str, package_name: str) -> dict:
         return {"task_name": f"Instalar {package_name}", "success": False,
                 "message": msg, "errors": [msg], "executed_commands": []}
 
-    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements --upgrade'
+    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements --locale pt-BR'
     result = run_powershell(cmd, timeout=600)
     
     # Se falhar, tenta reparar fontes e tenta mais uma vez

@@ -6,30 +6,24 @@ from app.utils.command_runner import run_powershell
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
 
+def set_firewall_profile_status(profile: str, enabled: bool) -> dict:
+    """Ativa ou desativa um perfil específico do Firewall (Domain, Private, Public)."""
+    status_str = "True" if enabled else "False"
+    logger.info(f"[Firewall] {'Ativando' if enabled else 'Desativando'} perfil {profile}...")
+    cmd = f"Set-NetFirewallProfile -Profile {profile} -Enabled {status_str}"
+    result = run_powershell(cmd)
+    msg = f"Perfil {profile} {'ativado' if enabled else 'desativado'}." if result["success"] else f"Falha: {result['error']}"
+    return {"success": result["success"], "message": msg, "executed_commands": [cmd]}
+
+
 def enable_firewall() -> dict:
     """Ativa o Firewall do Windows em todos os perfis."""
-    logger.info("[Firewall] Ativando Firewall do Windows...")
-    cmd = "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True"
-    result = run_powershell(cmd)
-    msg = "Firewall ativado em todos os perfis." if result["success"] else f"Falha: {result['error']}"
-    if result["success"]:
-        logger.info(f"[Firewall] {msg}")
-    else:
-        logger.error(f"[Firewall] {msg}")
-    return {"task_name": "Ativar Firewall", "success": result["success"],
-            "message": msg, "executed_commands": [cmd],
-            "errors": [] if result["success"] else [result["error"]], "details": {}}
+    return set_firewall_profile_status("Domain,Public,Private", True)
 
 
 def disable_firewall() -> dict:
-    """DESATIVA o Firewall. Use apenas para diagnóstico."""
-    logger.warning("[Firewall] Desativando Firewall — operação de risco!")
-    cmd = "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False"
-    result = run_powershell(cmd)
-    msg = "Firewall desativado." if result["success"] else f"Falha: {result['error']}"
-    return {"task_name": "Desativar Firewall", "success": result["success"],
-            "message": msg, "executed_commands": [cmd],
-            "errors": [] if result["success"] else [result["error"]], "details": {}}
+    """DESATIVA o Firewall em todos os perfis."""
+    return set_firewall_profile_status("Domain,Public,Private", False)
 
 
 def get_firewall_status() -> dict:
