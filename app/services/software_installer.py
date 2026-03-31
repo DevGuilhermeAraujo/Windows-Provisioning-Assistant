@@ -23,7 +23,7 @@ def install_software(package_id: str, package_name: str) -> dict:
                 "message": msg, "errors": [msg], "executed_commands": []}
 
     cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements'
-    result = run_powershell(cmd)
+    result = run_powershell(cmd, timeout=600)
     msg = (f"{package_name} instalado com sucesso."
            if result["success"] else f"Erro ao instalar {package_name}: {result['error']}")
     if result["success"]:

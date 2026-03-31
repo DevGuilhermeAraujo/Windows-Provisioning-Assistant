@@ -10,16 +10,19 @@ logger = logging.getLogger("WindowsProvisioningAssistant")
 def enable_rdp() -> dict:
     """Habilita RDP e configura o firewall correspondente."""
     logger.info("[RDP] Habilitando Acesso Remoto...")
+    # Tentamos os nomes em Inglês e Português para compatibilidade
     cmds = [
         "Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 0",
-        "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'",
+        "Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue",
+        "Enable-NetFirewallRule -DisplayGroup 'Área de Trabalho Remota' -ErrorAction SilentlyContinue",
     ]
     errors = []
     executed = []
     for cmd in cmds:
         r = run_powershell(cmd)
         executed.append(cmd)
-        if not r["success"]:
+        # Se for o Enable-NetFirewallRule, não consideramos erro se falhar em um dos idiomas
+        if not r["success"] and "Set-ItemProperty" in cmd:
             errors.append(r["error"] or "")
 
     # Adiciona regra customizada também

@@ -142,7 +142,8 @@ class DashboardFrame(ctk.CTkFrame):
 
     def load_info(self):
         info = system_info.get_full_system_info()
-        self.after(0, lambda: self.display_info(info))
+        if self.winfo_exists():
+            self.after(0, lambda: self.display_info(info))
 
     def display_info(self, info):
         # Cartão de Sistema
@@ -171,9 +172,30 @@ class ProvisioningFrame(ctk.CTkFrame):
     def create_widgets(self):
         ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
         
+        # Grid para inputs de configuração
+        input_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        input_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        input_frame.grid_columnconfigure((1, 3), weight=1)
+
+        ctk.CTkLabel(input_frame, text="Novo Hostname:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
+        self.entry_hostname = ctk.CTkEntry(input_frame, placeholder_text="Ex: PC-VENDAS-01")
+        self.entry_hostname.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+        ctk.CTkLabel(input_frame, text="IP Estático:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        self.entry_ip = ctk.CTkEntry(input_frame, placeholder_text="192.168.1.50")
+        self.entry_ip.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+
+        ctk.CTkLabel(input_frame, text="Máscara:").grid(row=1, column=2, padx=10, pady=10, sticky="e")
+        self.entry_mask = ctk.CTkEntry(input_frame, placeholder_text="255.255.255.0")
+        self.entry_mask.grid(row=1, column=3, padx=10, pady=10, sticky="ew")
+
+        ctk.CTkLabel(input_frame, text="Gateway:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        self.entry_gw = ctk.CTkEntry(input_frame, placeholder_text="192.168.1.1")
+        self.entry_gw.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
+
         # Checklist de tarefas
-        self.scroll = ctk.CTkScrollableFrame(self, height=400)
-        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        self.scroll = ctk.CTkScrollableFrame(self, height=300)
+        self.scroll.grid(row=2, column=0, sticky="nsew", pady=10)
         
         self.task_vars = {}
         tasks = [
@@ -193,27 +215,59 @@ class ProvisioningFrame(ctk.CTkFrame):
             self.task_vars[task_id] = var
 
         self.btn_run = ctk.CTkButton(self, text="🚀 Executar Provisionamento", height=45, fg_color=settings.ACCENT_COLOR, command=self.run_pipeline)
-        self.btn_run.grid(row=2, column=0, pady=20)
+        self.btn_run.grid(row=3, column=0, pady=20)
         
         self.progress = ctk.CTkProgressBar(self)
-        self.progress.grid(row=3, column=0, sticky="ew", pady=10)
+        self.progress.grid(row=4, column=0, sticky="ew", pady=10)
         self.progress.set(0)
 
     def run_pipeline(self):
+        # Capturar parâmetros da UI
+        h_name = self.entry_hostname.get()
+        s_ip = self.entry_ip.get()
+        s_mask = self.entry_mask.get()
+        s_gw = self.entry_gw.get()
+        
+        selected = []
+        for tid, var in self.task_vars.items():
+            if var.get():
+                task_item = {"id": tid, "params": {}}
+                # Preencher parâmetros baseado no ID da task
+                if tid == "hostname":
+                    task_item["params"] = {"new_name": h_name}
+                elif tid == "static_ip":
+                    # Detectar adaptador automaticamente
+                    from app.services.network_service import run_powershell
+                    res = run_powershell("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name")
+                    adapter = res["output"] if res["success"] else "Ethernet"
+                    task_item["params"] = {"adapter_name": adapter, "ip": s_ip, "mask": s_mask, "gateway": s_gw}
+                elif tid == "install_apps":
+                    # Pega todos os apps selecionados na outra aba (ou um padrão)
+                    task_item["params"] = {"packages": list(settings.WINGET_PACKAGES.keys())}
+                
+                selected.append(task_item)
+
         self.btn_run.configure(state="disabled")
-        selected = [{"id": tid} for tid, var in self.task_vars.items() if var.get()]
         
         def run():
             pipe = ProvisioningPipeline()
             pipe.set_callbacks(
-                on_progress=lambda p, m: self.after(0, lambda: self.update_progress(p, m)),
-                on_task_complete=lambda t, s, m: self.after(0, lambda: self.controller.update_log(f"{t}: {'OK' if s else 'ERRO'} - {m}"))
+                on_progress=lambda p, m: self.update_safe(lambda: self.update_progress(p, m)),
+                on_task_complete=lambda t, s, m: self.update_safe(lambda: self.controller.update_log(f"{t}: {'OK' if s else 'ERRO'} - {m}"))
             )
             pipe.execute_tasks(selected)
-            self.after(0, lambda: self.btn_run.configure(state="normal"))
-            messagebox.showinfo("Sucesso", "Provisionamento concluído!")
+            self.update_safe(self.finalize_run)
 
         threading.Thread(target=run, daemon=True).start()
+
+    def finalize_run(self):
+        self.btn_run.configure(state="normal")
+        messagebox.showinfo("Sucesso", "Provisionamento concluído!")
+
+    def update_safe(self, func):
+        """Executa uma função na thread principal apenas se o widget ainda existir."""
+        if self.winfo_exists():
+            self.after(0, func)
 
     def update_progress(self, val, msg):
         self.progress.set(val / 100)
@@ -257,7 +311,8 @@ class NetworkFrame(ctk.CTkFrame):
         
         def do_scan():
             res = ip_scanner.scan_network(cidr)
-            self.after(0, lambda: self.show_results(res))
+            if self.winfo_exists():
+                self.after(0, lambda: self.show_results(res))
             
         threading.Thread(target=do_scan, daemon=True).start()
 
@@ -316,7 +371,8 @@ class DomainFrame(ctk.CTkFrame):
         
         def run():
             res = join_domain(domain, user, password)
-            self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
+            if self.winfo_exists():
+                self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
             
         threading.Thread(target=run, daemon=True).start()
 
@@ -353,8 +409,9 @@ class SoftwareFrame(ctk.CTkFrame):
         
         def run():
             res = install_multiple(to_install)
-            self.after(0, lambda: self.btn_install.configure(state="normal"))
-            self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
+            if self.winfo_exists():
+                self.after(0, lambda: self.btn_install.configure(state="normal"))
+                self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
             
         threading.Thread(target=run, daemon=True).start()
 
@@ -390,7 +447,11 @@ class SecurityFrame(ctk.CTkFrame):
         from app.modules.task_registry import get_task_function
         func = get_task_function(task_id)
         if func:
-            threading.Thread(target=lambda: self.after(0, lambda: messagebox.showinfo("Task", func()["message"])), daemon=True).start()
+            def run():
+                res = func()
+                if self.winfo_exists():
+                    self.after(0, lambda: messagebox.showinfo("Task", res["message"]))
+            threading.Thread(target=run, daemon=True).start()
 
 class ReportFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):

@@ -2,7 +2,7 @@ import subprocess
 import logging
 
 
-def run_powershell(command: str) -> dict:
+def run_powershell(command: str, timeout: int = 30) -> dict:
     """
     Executa um comando PowerShell e captura stdout e stderr.
     Retorna um dicionário com 'success', 'output' e 'error'.
@@ -22,7 +22,7 @@ def run_powershell(command: str) -> dict:
             text=True,
             encoding="utf-8",
             errors="replace",      # Evita crash com chars especiais
-            timeout=30             # Timeout de segurança
+            timeout=timeout        # Timeout customizável
         )
 
         stdout = result.stdout.strip()
@@ -38,7 +38,7 @@ def run_powershell(command: str) -> dict:
             return {"success": False, "output": stdout, "error": stderr}
 
     except subprocess.TimeoutExpired:
-        msg = "PowerShell excedeu o tempo limite (30s)."
+        msg = f"PowerShell excedeu o tempo limite ({timeout}s)."
         _log_error(f"[PS] {msg}")
         return {"success": False, "output": "", "error": msg}
     except FileNotFoundError:
