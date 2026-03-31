@@ -215,6 +215,14 @@ class TaskItem(ctk.CTkFrame):
         self.inputs[key] = entry
         self.input_frame.grid_columnconfigure(1, weight=1)
 
+    def add_select(self, key, label, options):
+        row = len(self.inputs)
+        ctk.CTkLabel(self.input_frame, text=label).grid(row=row, column=0, padx=10, pady=5, sticky="w")
+        combo = ctk.CTkComboBox(self.input_frame, values=options, width=200)
+        combo.grid(row=row, column=1, padx=10, pady=5, sticky="ew")
+        self.inputs[key] = combo
+        self.input_frame.grid_columnconfigure(1, weight=1)
+
     def get_params(self):
         return {k: v.get() for k, v in self.inputs.items()}
 
@@ -224,7 +232,18 @@ class ProvisioningFrame(ctk.CTkFrame):
         self.controller = controller
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
+        
+        # Busca adaptadores de rede reais antes de criar os widgets
+        self.network_adapters = self.get_adapters()
         self.create_widgets()
+
+    def get_adapters(self):
+        """Busca nomes reais dos adaptadores de rede via PowerShell."""
+        from app.utils.command_runner import run_powershell
+        res = run_powershell("Get-NetAdapter | Select-Object -ExpandProperty Name")
+        if res["success"] and res["output"]:
+            return [line.strip() for line in res["output"].split("\n") if line.strip()]
+        return ["Ethernet", "Wi-Fi"] # Fallback
 
     def create_widgets(self):
         ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
@@ -243,6 +262,7 @@ class ProvisioningFrame(ctk.CTkFrame):
         
         # 2. Rede
         item_net = TaskItem(self.scroll, "static_ip", "Configurar IP Fixo", has_inputs=True)
+        item_net.add_select("adapter_name", "Adaptador:", self.network_adapters)
         item_net.add_input("ip", "Endereço IP:", "192.168.1.50")
         item_net.add_input("mask", "Máscara:", "255.255.255.0")
         item_net.add_input("gateway", "Gateway:", "192.168.1.1")
@@ -277,14 +297,8 @@ class ProvisioningFrame(ctk.CTkFrame):
             if item.var.get():
                 params = item.get_params()
                 
-                # Regras especiais de parâmetros
-                if tid == "static_ip":
-                    # Detectar adaptador automaticamente
-                    from app.services.network_service import run_powershell
-                    res = run_powershell("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1 -ExpandProperty Name")
-                    params["adapter_name"] = res["output"] if res["success"] else "Ethernet"
-                
-                elif tid == "install_apps":
+                # Regras especiais de parâmetros (já coletados pelos inputs/selects)
+                if tid == "install_apps":
                     # Pega exatamente o que foi marcado na aba lateral de Softwares
                     params["packages"] = [name for name, selected_sw in self.controller.software_state.items() if selected_sw]
                 

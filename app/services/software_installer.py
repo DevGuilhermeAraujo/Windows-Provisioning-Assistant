@@ -14,6 +14,12 @@ def _check_winget() -> bool:
     return result["success"]
 
 
+def repair_winget_sources():
+    """Tenta resetar as fontes do winget para resolver problemas de download."""
+    logger.warning("[Software] Detectado problema de fonte. Tentando resetar fontes do winget...")
+    run_powershell("winget source reset --force")
+    run_powershell("winget source update")
+
 def install_software(package_id: str, package_name: str) -> dict:
     """Instala um pacote via winget pelo seu ID."""
     logger.info(f"[Software] Instalando: {package_name} ({package_id})")
@@ -25,15 +31,24 @@ def install_software(package_id: str, package_name: str) -> dict:
 
     cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements --upgrade'
     result = run_powershell(cmd, timeout=600)
-    msg = (f"{package_name} instalado com sucesso."
-           if result["success"] else f"Erro ao instalar {package_name}: {result['error']}")
-    if result["success"]:
+    
+    # Se falhar, tenta reparar fontes e tenta mais uma vez
+    if not result["success"]:
+        repair_winget_sources()
+        logger.info(f"[Software] Retentando instalação de {package_name}...")
+        result = run_powershell(cmd, timeout=600)
+
+    success = result["success"]
+    if success:
+        msg = f"{package_name} instalado/atualizado com sucesso."
         logger.info(f"[Software] {msg}")
     else:
-        logger.error(f"[Software] {msg}")
+        msg = f"Erro ao instalar {package_name}. Verifique sua conexão ou se o app já está em uso."
+        logger.error(f"[Software] {msg}: {result['error']}")
+    
     return {
-        "task_name": f"Instalar {package_name}", "success": result["success"],
-        "message": msg, "errors": [] if result["success"] else [result["error"]],
+        "task_name": f"Instalar {package_name}", "success": success,
+        "message": msg, "errors": [] if success else [result["error"]],
         "executed_commands": [cmd], "details": {"package_id": package_id},
     }
 
