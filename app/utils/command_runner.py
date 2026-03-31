@@ -1,49 +1,66 @@
 import subprocess
 import logging
-import shlex
 
-def run_powershell(command: str):
-    """Executa um comando PowerShell e captura a saída."""
-    logger = logging.getLogger("WindowsProvisioningAssistant")
-    
-    # Montar comando PowerShell
-    # -ExecutionPolicy Bypass para evitar restrições de script
-    # -Command "{command}" para rodar o comando propriamente dito
-    ps_command = f'powershell.exe -ExecutionPolicy Bypass -Command "{command}"'
-    
-    logger.debug(f"Executando PowerShell: {ps_command}")
-    
+
+def run_powershell(command: str) -> dict:
+    """
+    Executa um comando PowerShell e captura stdout e stderr.
+    Retorna um dicionário com 'success', 'output' e 'error'.
+    """
+    # Monta o comando usando powershell.exe com execução irrestrita
+    ps_command = [
+        "powershell.exe",
+        "-ExecutionPolicy", "Bypass",
+        "-NonInteractive",
+        "-Command", command
+    ]
+
     try:
-        # Usando subprocess.run para capturar saída e erros
         result = subprocess.run(
-            ps_command, 
-            capture_output=True, 
-            text=True, 
-            encoding='cp850', # Encoding comum no console Windows brasileiro
-            shell=True # Shell=True para executar via powershell.exe diretamente
+            ps_command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",      # Evita crash com chars especiais
+            timeout=30             # Timeout de segurança
         )
-        
-        # Captura stdout e stderr
+
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
-        
+
         if result.returncode == 0:
+            # Log apenas se houver saída relevante
             if stdout:
-                logger.info(f"Saída: {stdout}")
+                _log_info(f"[PS] OK: {stdout[:200]}")
             return {"success": True, "output": stdout, "error": None}
         else:
-            logger.error(f"Erro na execução (Código {result.returncode}): {stderr}")
+            _log_error(f"[PS] Erro (código {result.returncode}): {stderr[:300]}")
             return {"success": False, "output": stdout, "error": stderr}
-            
+
+    except subprocess.TimeoutExpired:
+        msg = "PowerShell excedeu o tempo limite (30s)."
+        _log_error(f"[PS] {msg}")
+        return {"success": False, "output": "", "error": msg}
+    except FileNotFoundError:
+        msg = "powershell.exe não encontrado. Verifique sua instalação do Windows."
+        _log_error(f"[PS] {msg}")
+        return {"success": False, "output": "", "error": msg}
     except Exception as e:
-        logger.error(f"Falha ao executar o comando: {e}")
+        _log_error(f"[PS] Falha inesperada: {e}")
         return {"success": False, "output": "", "error": str(e)}
 
-def run_powershell_script(script_path: str, args: list = None):
-    """Executa um arquivo de script PowerShell (.ps1)."""
-    if args is None:
-        args = []
-    
-    params = " ".join([f'"{arg}"' for arg in args])
-    command = f"& '{script_path}' {params}"
-    return run_powershell(command)
+
+def _log_info(msg: str):
+    """Log de info sem riscos de reentrada na GUI."""
+    try:
+        logging.getLogger("WindowsProvisioningAssistant").info(msg)
+    except Exception:
+        pass
+
+
+def _log_error(msg: str):
+    """Log de erro sem riscos de reentrada na GUI."""
+    try:
+        logging.getLogger("WindowsProvisioningAssistant").error(msg)
+    except Exception:
+        pass

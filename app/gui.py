@@ -34,8 +34,9 @@ class App(ctk.CTk):
         # Variáveis de estado
         self.execution_log_data = []
 
-        # Inicializar Logger com callback para a interface
-        self.logger = setup_logger(gui_callback=self.update_log_box)
+        # Inicializar Logger SEM callback de GUI ainda
+        # O callback será adicionado depois que o log_textbox for criado
+        self.logger = setup_logger()
 
         # --- BANNER DE AVISO (somente sem admin) ---
         if not self.is_admin:
@@ -99,6 +100,13 @@ class App(ctk.CTk):
         self.status_label = ctk.CTkLabel(self.log_frame, text="Status: Aguardando ação...", text_color="gray")
         self.status_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
 
+        # Agora que o log_textbox existe, adiciona o callback de GUI ao logger
+        from .utils.logger import GUILogHandler
+        import logging
+        gui_handler = GUILogHandler(self.update_log_box)
+        gui_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        self.logger.addHandler(gui_handler)
+
         # Iniciar no frame de hostname
         self.select_frame("hostname")
 
@@ -128,14 +136,18 @@ class App(ctk.CTk):
     def create_network_frame(self):
         frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         frame.grid_columnconfigure(1, weight=1)
-        
+
         label = ctk.CTkLabel(frame, text="Configuração de Rede", font=ctk.CTkFont(size=24, weight="bold"))
         label.grid(row=0, column=0, columnspan=2, padx=20, pady=40)
-        
-        # Seleção de Interface
+
+        # Seleção de Interface - lida com falha silenciosa se PS não responder
         ctk.CTkLabel(frame, text="Interface:").grid(row=1, column=0, padx=20, pady=10, sticky="e")
-        self.adapters = get_network_adapters()
-        adapter_names = [a['Name'] for a in self.adapters] if self.adapters else ["Nenhum adaptador encontrado"]
+        try:
+            self.adapters = get_network_adapters()
+            adapter_names = [a['Name'] for a in self.adapters] if self.adapters else ["Nenhum adaptador encontrado"]
+        except Exception:
+            self.adapters = []
+            adapter_names = ["Erro ao listar adaptadores"]
         self.option_adapter = ctk.CTkOptionMenu(frame, values=adapter_names, width=300)
         self.option_adapter.grid(row=1, column=1, padx=20, pady=10, sticky="w")
         
