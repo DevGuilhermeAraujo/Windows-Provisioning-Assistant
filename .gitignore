@@ -1,0 +1,33 @@
+# Logs gerados automaticamente
+logs/
+
+# Relatórios e exportações geradas
+output/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Arquivos de build
+dist/
+build/
+*.egg-info/
+
+# Sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
