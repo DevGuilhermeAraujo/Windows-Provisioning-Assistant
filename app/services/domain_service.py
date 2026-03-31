@@ -2,23 +2,28 @@ import logging
 from ..utils.command_runner import run_powershell
 from ..utils.validators import validate_domain
 
+logger = logging.getLogger("WindowsProvisioningAssistant")
+
 def join_domain(domain_name: str, username: str, password: str):
     """
     Adiciona o computador ao domínio Active Directory.
     Requer credenciais e reinicialização.
     """
-    logger = logging.getLogger("WindowsProvisioningAssistant")
-    
     # 1. Validar domínio
     if not validate_domain(domain_name):
         msg = f"Domínio corporativo inválido: '{domain_name}'."
-        logger.error(msg)
-        return {"success": False, "message": msg}
+        logger.error(f"[Domínio] {msg}")
+        return {
+            "task_name": "Ingressar no Domínio",
+            "success": False,
+            "message": msg,
+            "details": {"domain": domain_name},
+            "executed_commands": [],
+            "errors": [msg]
+        }
     
-    logger.info(f"Tentando adicionar ao domínio: {domain_name} como usuário {username}")
+    logger.info(f"[Domínio] Tentando adicionar ao domínio: {domain_name} como usuário {username}...")
     
-    # Script PowerShell com Credential
-    # -Credential $(New-Object System.Management.Automation.PSCredential ...)
     ps_cmd = f"""
     $secpasswd = ConvertTo-SecureString '{password}' -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential ('{username}', $secpasswd)
@@ -29,11 +34,23 @@ def join_domain(domain_name: str, username: str, password: str):
     
     if result["success"]:
         msg = f"Computador adicionado com sucesso ao domínio '{domain_name}'. Uma reinicialização é necessária."
-        logger.info(msg)
-        return {"success": True, "message": msg, "reboot_required": True}
+        logger.info(f"[Domínio] {msg}")
+        return {
+            "task_name": "Ingressar no Domínio",
+            "success": True,
+            "message": msg,
+            "details": {"domain": domain_name, "reboot_required": True},
+            "executed_commands": [ps_cmd],
+            "errors": []
+        }
     else:
-        # Tenta sanitizar o erro para não mostrar o log por razões de segurança em certos casos
-        # mas aqui nós queremos o log completo para diagnóstico.
-        msg = f"Erro ao adicionar ao domínio: {result['error']}"
-        logger.error(msg)
-        return {"success": False, "message": msg}
+        msg = f"Falha ao entrar no domínio '{domain_name}' para o usuário '{username}'."
+        logger.error(f"[Domínio] {msg}: {result['error']}")
+        return {
+            "task_name": "Ingressar no Domínio",
+            "success": False,
+            "message": msg,
+            "details": {"domain": domain_name},
+            "executed_commands": [ps_cmd],
+            "errors": [result["error"]]
+        }

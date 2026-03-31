@@ -1,371 +1,440 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import logging
 import threading
+import os
 from datetime import datetime
 
-# Importações internas
-from .utils.system_info import get_current_hostname, get_network_adapters
-from .utils.logger import setup_logger
-from .utils.validators import validate_ip, validate_hostname, validate_domain
-from .services.hostname_service import rename_computer
-from .services.network_service import set_dhcp, set_static_ip
-from .services.domain_service import join_domain
-from .services.user_service import create_local_admin
-from .reports.report_generator import generate_report
+# Imports internos
 from .config import settings
+from .utils import system_info, ip_scanner, admin, file_utils
+from .database import db
+from .reports import report_generator, report_templates
+from .modules.provisioning_pipeline import ProvisioningPipeline
+from .modules.task_registry import get_available_tasks
+
+logger = logging.getLogger("WindowsProvisioningAssistant")
 
 class App(ctk.CTk):
     def __init__(self, is_admin: bool = True):
         super().__init__()
-
         self.is_admin = is_admin
+        self.setup_window()
+        self.init_state()
+        self.create_layout()
+        self.select_frame("dashboard")
 
-        # Título com indicação de modo
-        admin_label = "" if is_admin else " [MODO LIMITADO - Sem Admin]"
-        self.title(f"{settings.APP_NAME} v{settings.APP_VERSION}{admin_label}")
+    def setup_window(self):
+        """Configurações básicas da janela principal."""
+        self.title(f"{settings.APP_NAME} v{settings.APP_VERSION}" + ("" if self.is_admin else " [LIMITADO]"))
         self.geometry(f"{settings.WINDOW_WIDTH}x{settings.WINDOW_HEIGHT}")
-
-        # Layout principal: 2 colunas, 3 linhas (aviso, conteúdo, log)
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)  # row 1 = conteúdo principal
+        self.grid_rowconfigure(1, weight=1)
+        ctk.set_appearance_mode(settings.APPEARANCE_MODE)
+        ctk.set_default_color_theme(settings.COLOR_THEME)
 
-        # Variáveis de estado
-        self.execution_log_data = []
+    def init_state(self):
+        """Inicializa variáveis de estado da aplicação."""
+        self.current_frame = None
+        self.execution_history = []
+        self.selected_tasks = []
+        self.profiles = file_utils.load_json(settings.PROFILES_PATH)
 
-        # Inicializar Logger SEM callback de GUI ainda
-        # O callback será adicionado depois que o log_textbox for criado
-        self.logger = setup_logger()
-
-        # --- BANNER DE AVISO (somente sem admin) ---
+    def create_layout(self):
+        """Cria os componentes principais: Banner, Sidebar e Main Content."""
+        # 1. Banner de Alerta (se não for admin)
         if not self.is_admin:
             self.warning_bar = ctk.CTkFrame(self, fg_color="#7d3c00", height=35, corner_radius=0)
             self.warning_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
-            self.warning_bar.grid_propagate(False)
-            ctk.CTkLabel(
-                self.warning_bar,
-                text="⚠️  Executando SEM privilégios de Administrador. Ações do sistema irão falhar. Feche e rode como Admin.",
-                text_color="#FFD700",
-                font=ctk.CTkFont(size=12, weight="bold")
-            ).pack(side="left", padx=10, pady=5)
+            ctk.CTkLabel(self.warning_bar, text="⚠️ SEM PRIVILÉGIOS DE ADMIN. Algumas automações irão falhar.", 
+                        text_color="#FFD700", font=ctk.CTkFont(size=12, weight="bold")).pack(pady=5)
 
-        # --- SIDEBAR ---
-        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
-        self.sidebar_frame.grid(row=1, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(6, weight=1)
+        # 2. Sidebar de Navegação
+        self.sidebar = ctk.CTkFrame(self, width=220, corner_radius=0)
+        self.sidebar.grid(row=1, column=0, rowspan=2, sticky="nsew")
+        self.create_sidebar_content()
 
-        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Windows\nProvisioning", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+        # 3. Main Content Area
+        self.main_content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.main_content.grid(row=1, column=1, sticky="nsew", padx=20, pady=20)
+        self.main_content.grid_columnconfigure(0, weight=1)
+        self.main_content.grid_rowconfigure(0, weight=1)
 
-        self.btn_hostname = ctk.CTkButton(self.sidebar_frame, text="Nome do PC", command=lambda: self.select_frame("hostname"))
-        self.btn_hostname.grid(row=1, column=0, padx=20, pady=10)
+        # 4. Log Real-time (Bottom)
+        self.log_area = ctk.CTkTextbox(self, height=150, font=("Consolas", 12), state="disabled")
+        self.log_area.grid(row=2, column=1, sticky="ew", padx=20, pady=(0, 20))
 
-        self.btn_network = ctk.CTkButton(self.sidebar_frame, text="Rede", command=lambda: self.select_frame("network"))
-        self.btn_network.grid(row=2, column=0, padx=20, pady=10)
-
-        self.btn_domain = ctk.CTkButton(self.sidebar_frame, text="Domínio AD", command=lambda: self.select_frame("domain"))
-        self.btn_domain.grid(row=3, column=0, padx=20, pady=10)
-
-        self.btn_user = ctk.CTkButton(self.sidebar_frame, text="Usuário Local", command=lambda: self.select_frame("user"))
-        self.btn_user.grid(row=4, column=0, padx=20, pady=10)
-
-        self.btn_report = ctk.CTkButton(self.sidebar_frame, text="Gerar Relatório", fg_color="transparent", border_width=2, command=self.action_generate_report)
-        self.btn_report.grid(row=5, column=0, padx=20, pady=10)
-
-        self.appearance_mode_label = ctk.CTkLabel(self.sidebar_frame, text="Modo:", anchor="w")
-        self.appearance_mode_label.grid(row=7, column=0, padx=20, pady=(10, 0))
-        self.appearance_mode_optionemenu = ctk.CTkOptionMenu(self.sidebar_frame, values=["Light", "Dark", "System"], command=self.change_appearance_mode)
-        self.appearance_mode_optionemenu.grid(row=8, column=0, padx=20, pady=(10, 20))
-        self.appearance_mode_optionemenu.set("Dark")
-
-        # --- MAIN FRAMES ---
-        self.frame_hostname = self.create_hostname_frame()
-        self.frame_network = self.create_network_frame()
-        self.frame_domain = self.create_domain_frame()
-        self.frame_user = self.create_user_frame()
-
-        # --- LOG SECTION (BOTTOM) ---
-        self.log_frame = ctk.CTkFrame(self, height=200)
-        self.log_frame.grid(row=2, column=1, sticky="nsew", padx=20, pady=(0, 20))
-        self.log_frame.grid_columnconfigure(0, weight=1)
-        self.log_frame.grid_rowconfigure(1, weight=1)
-
-        self.log_header = ctk.CTkLabel(self.log_frame, text="Logs em tempo real", font=ctk.CTkFont(size=14, weight="bold"))
-        self.log_header.grid(row=0, column=0, padx=10, pady=5, sticky="w")
-
-        self.log_textbox = ctk.CTkTextbox(self.log_frame, state="disabled", font=("Consolas", 12))
-        self.log_textbox.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-
-        self.status_label = ctk.CTkLabel(self.log_frame, text="Status: Aguardando ação...", text_color="gray")
-        self.status_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
-
-        # Agora que o log_textbox existe, adiciona o callback de GUI ao logger
-        from .utils.logger import GUILogHandler
-        import logging
-        gui_handler = GUILogHandler(self.update_log_box)
-        gui_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        self.logger.addHandler(gui_handler)
-
-        # Iniciar no frame de hostname
-        self.select_frame("hostname")
-
-    # --- FRAME FACTORIES ---
-
-    def create_hostname_frame(self):
-        frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=1)
+    def create_sidebar_content(self):
+        """Popula a barra lateral com botões de navegação."""
+        ctk.CTkLabel(self.sidebar, text="WPA Business", font=ctk.CTkFont(size=22, weight="bold")).pack(pady=30)
         
-        label = ctk.CTkLabel(frame, text="Alterar Nome do Computador", font=ctk.CTkFont(size=24, weight="bold"))
-        label.grid(row=0, column=0, padx=20, pady=40)
+        self.nav_btns = {}
+        menu = [
+            ("dashboard", "🏠 Dashboard"),
+            ("provisioning", "🚀 Provisionamento"),
+            ("network", "🌐 Rede & Scanner"),
+            ("domain", "🏢 Domínio AD"),
+            ("software", "📦 Softwares"),
+            ("security", "🛡️ Segurança"),
+            ("reports", "📄 Relatórios"),
+            ("history", "🕒 Histórico")
+        ]
         
-        # Nome Atual
-        current_name = get_current_hostname()
-        self.lbl_current_name = ctk.CTkLabel(frame, text=f"Nome Atual: {current_name}", font=ctk.CTkFont(size=16))
-        self.lbl_current_name.grid(row=1, column=0, padx=20, pady=10)
-        
-        # Novo Nome
-        self.entry_new_hostname = ctk.CTkEntry(frame, placeholder_text="Novo Hostname (ex: EST-ADM-01)", width=300)
-        self.entry_new_hostname.grid(row=2, column=0, padx=20, pady=20)
-        
-        btn = ctk.CTkButton(frame, text="Aplicar Alteração", command=self.action_rename_computer)
-        btn.grid(row=3, column=0, padx=20, pady=20)
-        
-        return frame
-
-    def create_network_frame(self):
-        frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        frame.grid_columnconfigure(1, weight=1)
-
-        label = ctk.CTkLabel(frame, text="Configuração de Rede", font=ctk.CTkFont(size=24, weight="bold"))
-        label.grid(row=0, column=0, columnspan=2, padx=20, pady=40)
-
-        # Seleção de Interface - lida com falha silenciosa se PS não responder
-        ctk.CTkLabel(frame, text="Interface:").grid(row=1, column=0, padx=20, pady=10, sticky="e")
-        try:
-            self.adapters = get_network_adapters()
-            adapter_names = [a['Name'] for a in self.adapters] if self.adapters else ["Nenhum adaptador encontrado"]
-        except Exception:
-            self.adapters = []
-            adapter_names = ["Erro ao listar adaptadores"]
-        self.option_adapter = ctk.CTkOptionMenu(frame, values=adapter_names, width=300)
-        self.option_adapter.grid(row=1, column=1, padx=20, pady=10, sticky="w")
-        
-        # Checkbox DHCP
-        self.check_dhcp = ctk.CTkCheckBox(frame, text="Usar DHCP", command=self.toggle_network_fields)
-        self.check_dhcp.grid(row=2, column=1, padx=20, pady=10, sticky="w")
-        self.check_dhcp.select()
-        
-        # Campos de IP Estático
-        self.entry_ip = ctk.CTkEntry(frame, placeholder_text="IP (Ex: 192.168.1.50)", width=300)
-        self.entry_mask = ctk.CTkEntry(frame, placeholder_text="Máscara (Ex: 255.255.255.0)", width=300)
-        self.entry_gw = ctk.CTkEntry(frame, placeholder_text="Gateway", width=300)
-        self.entry_dns1 = ctk.CTkEntry(frame, placeholder_text="DNS Primário", width=300)
-        self.entry_dns2 = ctk.CTkEntry(frame, placeholder_text="DNS Secundário", width=300)
-        
-        self.network_entries = [self.entry_ip, self.entry_mask, self.entry_gw, self.entry_dns1, self.entry_dns2]
-        for i, entry in enumerate(self.network_entries):
-            entry.grid(row=3+i, column=1, padx=20, pady=5, sticky="w")
-            entry.configure(state="disabled") # Começa desabilitado por causa do DHCP
-            
-        btn = ctk.CTkButton(frame, text="Aplicar Configuração de Rede", command=self.action_configure_network)
-        btn.grid(row=8, column=1, padx=20, pady=30, sticky="w")
-        
-        return frame
-
-    def create_domain_frame(self):
-        frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        frame.grid_columnconfigure(1, weight=1)
-        
-        label = ctk.CTkLabel(frame, text="Adicionar ao Domínio AD", font=ctk.CTkFont(size=24, weight="bold"))
-        label.grid(row=0, column=0, columnspan=2, padx=20, pady=40)
-        
-        ctk.CTkLabel(frame, text="Domínio:").grid(row=1, column=0, padx=20, pady=10, sticky="e")
-        self.entry_domain = ctk.CTkEntry(frame, placeholder_text="corp.local", width=300)
-        self.entry_domain.grid(row=1, column=1, padx=20, pady=10, sticky="w")
-        
-        ctk.CTkLabel(frame, text="Usuário Admin:").grid(row=2, column=0, padx=20, pady=10, sticky="e")
-        self.entry_domain_user = ctk.CTkEntry(frame, placeholder_text="Administrator", width=300)
-        self.entry_domain_user.grid(row=2, column=1, padx=20, pady=10, sticky="w")
-        
-        ctk.CTkLabel(frame, text="Senha:").grid(row=3, column=0, padx=20, pady=10, sticky="e")
-        self.entry_domain_pass = ctk.CTkEntry(frame, show="*", width=300)
-        self.entry_domain_pass.grid(row=3, column=1, padx=20, pady=10, sticky="w")
-        
-        btn = ctk.CTkButton(frame, text="Entrar no Domínio", command=self.action_join_domain)
-        btn.grid(row=4, column=1, padx=20, pady=30, sticky="w")
-        
-        return frame
-
-    def create_user_frame(self):
-        frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        frame.grid_columnconfigure(1, weight=1)
-        
-        label = ctk.CTkLabel(frame, text="Criar Usuário Local Admin", font=ctk.CTkFont(size=24, weight="bold"))
-        label.grid(row=0, column=0, columnspan=2, padx=20, pady=40)
-        
-        ctk.CTkLabel(frame, text="Nome de Usuário:").grid(row=1, column=0, padx=20, pady=10, sticky="e")
-        self.entry_local_user = ctk.CTkEntry(frame, placeholder_text="suporte.local", width=300)
-        self.entry_local_user.grid(row=1, column=1, padx=20, pady=10, sticky="w")
-        
-        ctk.CTkLabel(frame, text="Senha:").grid(row=2, column=0, padx=20, pady=10, sticky="e")
-        self.entry_local_pass = ctk.CTkEntry(frame, show="*", width=300)
-        self.entry_local_pass.grid(row=2, column=1, padx=20, pady=10, sticky="w")
-        
-        btn = ctk.CTkButton(frame, text="Criar Usuário Administrador", command=self.action_create_user)
-        btn.grid(row=3, column=1, padx=20, pady=30, sticky="w")
-        
-        return frame
-
-    # --- UI HELPERS ---
+        for frame_id, label in menu:
+            btn = ctk.CTkButton(self.sidebar, text=label, anchor="w", fg_color="transparent",
+                               hover_color=settings.BG_CARD, command=lambda f=frame_id: self.select_frame(f))
+            btn.pack(padx=15, pady=5, fill="x")
+            self.nav_btns[frame_id] = btn
 
     def select_frame(self, name):
-        # Reset colors of sidebar buttons
-        self.btn_hostname.configure(fg_color=("gray75", "gray25") if name != "hostname" else ["#3B8ED0", "#1F6AA5"])
-        self.btn_network.configure(fg_color=("gray75", "gray25") if name != "network" else ["#3B8ED0", "#1F6AA5"])
-        self.btn_domain.configure(fg_color=("gray75", "gray25") if name != "domain" else ["#3B8ED0", "#1F6AA5"])
-        self.btn_user.configure(fg_color=("gray75", "gray25") if name != "user" else ["#3B8ED0", "#1F6AA5"])
-
-        # Esconder todos os frames
-        self.frame_hostname.grid_forget()
-        self.frame_network.grid_forget()
-        self.frame_domain.grid_forget()
-        self.frame_user.grid_forget()
-
-        # Mostrar o selecionado (row=1 para respeitar o banner no row=0)
-        if name == "hostname":
-            self.frame_hostname.grid(row=1, column=1, sticky="nsew")
+        """Alterna entre as abas da aplicação."""
+        for btn in self.nav_btns.values():
+            btn.configure(fg_color="transparent")
+        self.nav_btns[name].configure(fg_color=settings.ACCENT_COLOR)
+        
+        # Limpa o frame atual
+        if self.current_frame:
+            self.current_frame.destroy()
+            
+        # Cria o novo frame
+        if name == "dashboard":
+            self.current_frame = DashboardFrame(self.main_content, self)
+        elif name == "provisioning":
+            self.current_frame = ProvisioningFrame(self.main_content, self)
         elif name == "network":
-            self.frame_network.grid(row=1, column=1, sticky="nsew")
+            self.current_frame = NetworkFrame(self.main_content, self)
         elif name == "domain":
-            self.frame_domain.grid(row=1, column=1, sticky="nsew")
-        elif name == "user":
-            self.frame_user.grid(row=1, column=1, sticky="nsew")
+            self.current_frame = DomainFrame(self.main_content, self)
+        elif name == "software":
+            self.current_frame = SoftwareFrame(self.main_content, self)
+        elif name == "security":
+            self.current_frame = SecurityFrame(self.main_content, self)
+        elif name == "reports":
+            self.current_frame = ReportFrame(self.main_content, self)
+        elif name == "history":
+            self.current_frame = HistoryFrame(self.main_content, self)
+        
+        if self.current_frame:
+            self.current_frame.grid(row=0, column=0, sticky="nsew")
 
-    def toggle_network_fields(self):
-        state = "disabled" if self.check_dhcp.get() else "normal"
-        for entry in self.network_entries:
-            entry.configure(state=state)
+    def update_log(self, message: str):
+        """Adiciona mensagem ao log da interface."""
+        self.log_area.configure(state="normal")
+        self.log_area.insert("end", f"[{datetime.now().strftime('%H:%M:%S')}] {message}\n")
+        self.log_area.see("end")
+        self.log_area.configure(state="disabled")
 
-    def update_log_box(self, message):
-        self.log_textbox.configure(state="normal")
-        self.log_textbox.insert("end", message)
-        self.log_textbox.see("end")
-        self.log_textbox.configure(state="disabled")
-        # Também guarda para o relatório
-        self.execution_log_data.append(message.strip())
+# --- CLASSES DE FRAMES (ABAS) ---
 
-    def set_status(self, text, color="gray"):
-        self.status_label.configure(text=f"Status: {text}", text_color=color)
+class DashboardFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure((0, 1), weight=1)
+        self.create_widgets()
 
-    def change_appearance_mode(self, new_appearance_mode):
-        ctk.set_appearance_mode(new_appearance_mode)
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Dashboard do Sistema", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 20))
+        
+        # Coleta infos em thread para não travar
+        threading.Thread(target=self.load_info, daemon=True).start()
 
-    # --- ACTIONS (THREADED) ---
+    def load_info(self):
+        info = system_info.get_full_system_info()
+        self.after(0, lambda: self.display_info(info))
 
-    def run_in_thread(self, target, *args):
-        self.set_status("Executando...", settings.INFO_COLOR)
-        def wrapper():
-            try:
-                target(*args)
-            except Exception as e:
-                self.logger.error(f"Erro inesperado: {e}")
-                self.set_status("Erro!", settings.ERROR_COLOR)
-        threading.Thread(target=wrapper, daemon=True).start()
+    def display_info(self, info):
+        # Cartão de Sistema
+        card_sys = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        card_sys.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
+        ctk.CTkLabel(card_sys, text="Computador", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        ctk.CTkLabel(card_sys, text=f"Host: {info['hostname']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"Serial: {info['serial']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"SO: {info['win_caption']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
-    def action_rename_computer(self):
-        new_name = self.entry_new_hostname.get().strip()
-        if not new_name:
-            messagebox.showwarning("Aviso", "O nome não pode estar vazio.")
+        # Cartão de Hardware
+        card_hw = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        card_hw.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
+        ctk.CTkLabel(card_hw, text="Hardware", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        ctk.CTkLabel(card_hw, text=f"CPU: {info['cpu']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"RAM: {info['ram_gb']} GB", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"Rede: {info['ip']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
+
+class ProvisioningFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        # Checklist de tarefas
+        self.scroll = ctk.CTkScrollableFrame(self, height=400)
+        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        
+        self.task_vars = {}
+        tasks = [
+            ("hostname", "Alterar Hostname"),
+            ("static_ip", "Configurar IP Fixo"),
+            ("time_sync", "Sincronizar NTP"),
+            ("perf_plan", "Plano de Alta Performance"),
+            ("firewall_on", "Ativar Firewall"),
+            ("rdp_on", "Habilitar RDP"),
+            ("install_apps", "Instalar Softwares"),
+            ("cleanup", "Limpeza de Sistema")
+        ]
+        
+        for task_id, label in tasks:
+            var = tk.BooleanVar(value=True)
+            ctk.CTkCheckBox(self.scroll, text=label, variable=var).pack(anchor="w", padx=20, pady=5)
+            self.task_vars[task_id] = var
+
+        self.btn_run = ctk.CTkButton(self, text="🚀 Executar Provisionamento", height=45, fg_color=settings.ACCENT_COLOR, command=self.run_pipeline)
+        self.btn_run.grid(row=2, column=0, pady=20)
+        
+        self.progress = ctk.CTkProgressBar(self)
+        self.progress.grid(row=3, column=0, sticky="ew", pady=10)
+        self.progress.set(0)
+
+    def run_pipeline(self):
+        self.btn_run.configure(state="disabled")
+        selected = [{"id": tid} for tid, var in self.task_vars.items() if var.get()]
+        
+        def run():
+            pipe = ProvisioningPipeline()
+            pipe.set_callbacks(
+                on_progress=lambda p, m: self.after(0, lambda: self.update_progress(p, m)),
+                on_task_complete=lambda t, s, m: self.after(0, lambda: self.controller.update_log(f"{t}: {'OK' if s else 'ERRO'} - {m}"))
+            )
+            pipe.execute_tasks(selected)
+            self.after(0, lambda: self.btn_run.configure(state="normal"))
+            messagebox.showinfo("Sucesso", "Provisionamento concluído!")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def update_progress(self, val, msg):
+        self.progress.set(val / 100)
+        self.controller.update_log(msg)
+
+class NetworkFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Rede & Scanner", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        # Scanner Controls
+        scan_bar = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        scan_bar.grid(row=1, column=0, sticky="ew", pady=10)
+        
+        ctk.CTkLabel(scan_bar, text="Range CIDR:").pack(side="left", padx=10)
+        self.entry_cidr = ctk.CTkEntry(scan_bar, placeholder_text="192.168.1.0/24")
+        self.entry_cidr.pack(side="left", padx=10, fill="x", expand=True)
+        
+        self.btn_scan = ctk.CTkButton(scan_bar, text="🔍 Scanner de IPs", width=120, command=self.run_scanner)
+        self.btn_scan.pack(side="left", padx=10)
+        
+        # Results Table (Simulated with Text)
+        self.results_box = ctk.CTkTextbox(self, height=300)
+        self.results_box.grid(row=2, column=0, sticky="nsew", pady=10)
+        self.results_box.insert("end", "Inicie um scan para ver IPs livres/ocupados...")
+
+    def run_scanner(self):
+        cidr = self.entry_cidr.get()
+        if not cidr:
+            messagebox.showwarning("Aviso", "Informe um range CIDR (ex: 192.168.1.0/24)")
             return
+            
+        self.btn_scan.configure(state="disabled")
+        self.results_box.delete("1.0", "end")
+        self.results_box.insert("end", f"Iniciando scan em {cidr}...")
         
-        def task():
-            res = rename_computer(new_name)
-            if res["success"]:
-                self.set_status("Sucesso! Reinicie o PC.", settings.SUCCESS_COLOR)
-                messagebox.showinfo("Sucesso", res["message"])
-            else:
-                self.set_status("Falha ao renomear.", settings.ERROR_COLOR)
-                messagebox.showerror("Erro", res["message"])
-                
-        self.run_in_thread(task)
+        def do_scan():
+            res = ip_scanner.scan_network(cidr)
+            self.after(0, lambda: self.show_results(res))
+            
+        threading.Thread(target=do_scan, daemon=True).start()
 
-    def action_configure_network(self):
-        adapter = self.option_adapter.get()
-        is_dhcp = self.check_dhcp.get()
+    def show_results(self, res):
+        self.btn_scan.configure(state="normal")
+        self.results_box.delete("1.0", "end")
+        if "error" in res:
+            self.results_box.insert("end", f"Erro: {res['error']}")
+            return
+            
+        self.results_box.insert("end", f"Scan Completo em {res['network']}\n")
+        self.results_box.insert("end", f"Ocupados: {len(res['occupied'])} | Livres: {len(res['free'])}\n\n")
+        self.results_box.insert("end", "Sugestões de IPs Livres:\n")
+        for ip in res['suggestions']:
+            self.results_box.insert("end", f"  - {ip}\n")
+
+class DomainFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Domínio Active Directory", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
         
-        def task():
-            if is_dhcp:
-                res = set_dhcp(adapter)
-            else:
-                ip = self.entry_ip.get().strip()
-                mask = self.entry_mask.get().strip()
-                gw = self.entry_gw.get().strip()
-                dns = [self.entry_dns1.get().strip(), self.entry_dns2.get().strip()]
-                res = set_static_ip(adapter, ip, mask, gw if gw else None, dns)
-                
-            if res["success"]:
-                self.set_status("Rede configurada.", settings.SUCCESS_COLOR)
-                messagebox.showinfo("Sucesso", res["message"])
-            else:
-                self.set_status("Erro na rede.", settings.ERROR_COLOR)
-                messagebox.showerror("Erro", res["message"])
-
-        self.run_in_thread(task)
-
-    def action_join_domain(self):
-        domain = self.entry_domain.get().strip()
-        user = self.entry_domain_user.get().strip()
-        pwd = self.entry_domain_pass.get().strip()
+        form = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        form.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
         
-        if not domain or not user or not pwd:
-            messagebox.showwarning("Campos vazios", "Preencha todos os campos do domínio.")
+        ctk.CTkLabel(form, text="Domínio:").pack(padx=20, pady=5, anchor="w")
+        self.entry_domain = ctk.CTkEntry(form, width=300)
+        self.entry_domain.pack(padx=20, pady=5, anchor="w")
+        
+        ctk.CTkLabel(form, text="Usuário Admin:").pack(padx=20, pady=5, anchor="w")
+        self.entry_user = ctk.CTkEntry(form, width=300)
+        self.entry_user.pack(padx=20, pady=5, anchor="w")
+        
+        ctk.CTkLabel(form, text="Senha:").pack(padx=20, pady=5, anchor="w")
+        self.entry_pass = ctk.CTkEntry(form, width=300, show="*")
+        self.entry_pass.pack(padx=20, pady=5, anchor="w")
+        
+        self.btn_join = ctk.CTkButton(form, text="🏢 Ingressar no Domínio", command=self.join_domain)
+        self.btn_join.pack(padx=20, pady=30, anchor="w")
+
+    def join_domain(self):
+        domain = self.entry_domain.get()
+        user = self.entry_user.get()
+        password = self.entry_pass.get()
+        
+        if not domain or not user or not password:
+            messagebox.showwarning("Aviso", "Preencha todos os campos do domínio.")
             return
 
-        def task():
-            res = join_domain(domain, user, pwd)
-            if res["success"]:
-                self.set_status("Ingressou no domínio. Reinicie.", settings.SUCCESS_COLOR)
-                messagebox.showinfo("Sucesso", res["message"])
-            else:
-                self.set_status("Erro no domínio.", settings.ERROR_COLOR)
-                messagebox.showerror("Erro", res["message"])
-
-        self.run_in_thread(task)
-
-    def action_create_user(self):
-        user = self.entry_local_user.get().strip()
-        pwd = self.entry_local_pass.get().strip()
+        from .services.domain_service import join_domain
+        self.controller.update_log(f"Iniciando tentativa de ingressar em {domain}...")
         
-        if not user or not pwd:
-            messagebox.showwarning("Campos vazios", "Preencha usuário e senha.")
+        def run():
+            res = join_domain(domain, user, password)
+            self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
+            
+        threading.Thread(target=run, daemon=True).start()
+
+class SoftwareFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Instalação de Softwares", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        self.scroll = ctk.CTkScrollableFrame(self, height=400)
+        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        
+        self.sw_vars = {}
+        for name in settings.WINGET_PACKAGES.keys():
+            var = tk.BooleanVar()
+            ctk.CTkCheckBox(self.scroll, text=name, variable=var).pack(anchor="w", padx=20, pady=5)
+            self.sw_vars[name] = var
+
+        self.btn_install = ctk.CTkButton(self, text="📦 Instalar Selecionados", command=self.install_sw)
+        self.btn_install.grid(row=2, column=0, pady=20)
+
+    def install_sw(self):
+        to_install = [name for name, var in self.sw_vars.items() if var.get()]
+        if not to_install:
+            messagebox.showwarning("Aviso", "Selecione ao menos um software.")
             return
+            
+        self.btn_install.configure(state="disabled")
+        from .services.software_installer import install_multiple
+        
+        def run():
+            res = install_multiple(to_install)
+            self.after(0, lambda: self.btn_install.configure(state="normal"))
+            self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
+            
+        threading.Thread(target=run, daemon=True).start()
 
-        def task():
-            res = create_local_admin(user, pwd)
-            if res["success"]:
-                self.set_status("Usuário criado.", settings.SUCCESS_COLOR)
-                messagebox.showinfo("Sucesso", res["message"])
-            else:
-                self.set_status("Erro ao criar usuário.", settings.ERROR_COLOR)
-                messagebox.showerror("Erro", res["message"])
+class SecurityFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
 
-        self.run_in_thread(task)
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Segurança & Usuários", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        # Firewall
+        fw_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        fw_box.grid(row=1, column=0, sticky="ew", padx=10, pady=10)
+        ctk.CTkLabel(fw_box, text="Firewall do Windows", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
+        ctk.CTkButton(fw_box, text="Ativar Firewall", width=120, command=lambda: self.run_task("firewall_on")).pack(side="right", padx=10)
+        
+        # RDP
+        rdp_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        rdp_box.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        ctk.CTkLabel(rdp_box, text="Acesso Remoto (RDP)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
+        ctk.CTkButton(rdp_box, text="Habilitar RDP", width=120, command=lambda: self.run_task("rdp_on")).pack(side="right", padx=10)
 
-    def action_generate_report(self):
-        # Coletar dados simplificados para o relatório
-        report_data = {
-            "hostname_atual": get_current_hostname(),
-            "logs_execucao": self.execution_log_data
-        }
-        res = generate_report(report_data)
+        # BitLocker
+        bl_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        bl_box.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        ctk.CTkLabel(bl_box, text="BitLocker (C:)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=20, pady=20)
+        ctk.CTkButton(bl_box, text="Criptografar", width=120, command=lambda: self.run_task("bitlocker")).pack(side="right", padx=10)
+
+    def run_task(self, task_id):
+        from .modules.task_registry import get_task_function
+        func = get_task_function(task_id)
+        if func:
+            threading.Thread(target=lambda: self.after(0, lambda: messagebox.showinfo("Task", func()["message"])), daemon=True).start()
+
+class ReportFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Relatórios & Exportações", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        btn_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        btn_box.grid(row=1, column=0, sticky="nsew", padx=20, pady=20)
+        
+        ctk.CTkButton(btn_box, text="📂 Abrir Pasta de Relatórios", command=lambda: file_utils.open_folder(settings.REPORTS_DIR)).pack(pady=10, padx=20, fill="x")
+        ctk.CTkButton(btn_box, text="📊 Exportar Histórico para CSV", command=self.export_csv).pack(pady=10, padx=20, fill="x")
+
+    def export_csv(self):
+        res = report_generator.export_db_history_to_csv()
         if res["success"]:
-            messagebox.showinfo("Relatório", f"Relatório salvo em:\n{res['filepath']}")
+            messagebox.showinfo("Sucesso", f"Histórico exportado:\n{res['filepath']}")
         else:
-            messagebox.showerror("Erro", "Falha ao gerar relatório.")
+            messagebox.showerror("Erro", res["message"])
 
-if __name__ == "__main__":
-    ctk.set_appearance_mode("Dark")
-    ctk.set_default_color_theme("blue")
-    app = App()
-    app.mainloop()
+class HistoryFrame(ctk.CTkFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, fg_color="transparent")
+        self.controller = controller
+        self.grid_columnconfigure(0, weight=1)
+        self.create_widgets()
+
+    def create_widgets(self):
+        ctk.CTkLabel(self, text="Histórico de Execuções", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
+        
+        self.scroll = ctk.CTkScrollableFrame(self, height=500)
+        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        self.load_history()
+
+    def load_history(self):
+        data = db.get_all_executions()
+        for i, run in enumerate(data):
+            f = ctk.CTkFrame(self.scroll, fg_color=settings.BG_CARD)
+            f.pack(fill="x", pady=5, padx=10)
+            
+            status_color = settings.SUCCESS_COLOR if run['status'] == 'SUCCESS' else settings.ERROR_COLOR
+            ctk.CTkLabel(f, text=f"ID: {run['id']} | {run['datetime_start'][:19]} | {run['computer_name']}", font=ctk.CTkFont(size=12)).pack(side="left", padx=15, pady=10)
+            ctk.CTkLabel(f, text=run['status'], text_color=status_color, font=ctk.CTkFont(weight="bold")).pack(side="right", padx=15)

@@ -1,63 +1,69 @@
-"""
-Windows Provisioning Assistant - Ponto de entrada principal.
-
-Verifica privilégios de administrador, inicializa o logger e abre a GUI.
-Se a elevação for bloqueada, o app ainda abre com avisos nas ações que precisam de admin.
-"""
-
 import sys
 import os
+import argparse
+import logging
+from .utils import admin, logger
+from .database import db
+from .gui import App
+from .config import settings
 
-# Adiciona o diretório raiz ao path para imports absolutos
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+def parse_args():
+    parser = argparse.ArgumentParser(description="Windows Provisioning Assistant v2")
+    parser.add_argument("--profile", type=str, help="Executar um perfil específico automaticamente")
+    parser.add_argument("--silent", action="store_true", help="Executar em modo silencioso (sem interface)")
+    return parser.parse_args()
 
-from app.utils.admin import is_admin, run_as_admin
-from app.utils.logger import setup_logger
-
+def handle_silent_mode(args):
+    """Executa o provisionamento em modo silencioso baseado em um perfil."""
+    from .modules.provisioning_pipeline import ProvisioningPipeline
+    from .modules.task_registry import get_available_tasks
+    
+    profiles = db.load_json(settings.PROFILES_PATH)
+    profile_name = args.profile
+    
+    if profile_name not in profiles:
+        print(f"Erro: Perfil '{profile_name}' não encontrado.")
+        sys.exit(1)
+        
+    profile_data = profiles[profile_name]
+    tasks = [{"id": tid} for tid in profile_data.get("tasks", [])]
+    
+    print(f"Iniciando Provisionamento Silencioso: {profile_name}")
+    pipeline = ProvisioningPipeline()
+    results = pipeline.execute_tasks(tasks)
+    
+    print(f"Resultado Final: {results['status']}")
+    sys.exit(0 if results['status'] == 'SUCCESS' else 1)
 
 def main():
-    """Função principal de inicialização."""
-
-    # 1. Tentar elevar privilégios se necessário
-    admin = is_admin()
-
-    if not admin:
-        print("[AVISO] Sem privilégios de Administrador. Tentando elevar...")
-        elevated = run_as_admin()
-
-        if elevated:
-            # Elevação solicitada com sucesso — encerra o processo atual
-            # O novo processo elevado continuará a execução
+    args = parse_args()
+    
+    # 1. Configurar Logger
+    log = logger.setup_logger()
+    log.info("="*60)
+    log.info(f"{settings.APP_NAME} v{settings.APP_VERSION} iniciando...")
+    
+    # 2. Verificar Admin
+    is_admin = admin.is_user_admin()
+    if not is_admin:
+        log.warning("Sem privilégios de Administrador. Tentando elevar...")
+        if admin.run_as_admin():
+            # Se conseguiu elevar, o processo atual fecha e um novo abre
             sys.exit(0)
         else:
-            # Elevação bloqueada (GPO, UAC restritivo, etc.)
-            # Continua a execução em modo limitado com aviso na interface
-            print("[AVISO] Elevação bloqueada ou negada. Abrindo em modo limitado.")
+            log.error("Elevação bloqueada ou negada. Prosseguindo em modo limitado.")
+    
+    # 3. Inicializar Banco de Dados
+    db.initialize_db()
+    
+    # 4. Modo Silencioso
+    if args.silent and args.profile:
+        handle_silent_mode(args)
+        return
 
-    # 2. Inicializar Logger
-    logger = setup_logger()
-    logger.info("=" * 60)
-    logger.info("Windows Provisioning Assistant iniciando...")
-    logger.info(f"Usuário: {os.getenv('USERNAME', 'desconhecido')}")
-    logger.info(f"Executando como Administrador: {admin}")
-    if not admin:
-        logger.warning(
-            "MODO LIMITADO: sem privilégios de admin. "
-            "Ações que exigem admin irão falhar com mensagem de erro."
-        )
-    logger.info("=" * 60)
-
-    # 3. Configurar CustomTkinter e abrir GUI
-    import customtkinter as ctk
-    ctk.set_appearance_mode("Dark")
-    ctk.set_default_color_theme("blue")
-
-    from app.gui import App
-    app = App(is_admin=admin)
-    logger.info("Interface gráfica aberta com sucesso.")
+    # 5. Iniciar Interface Gráfica
+    app = App(is_admin=is_admin)
     app.mainloop()
-    logger.info("Aplicação encerrada pelo usuário.")
-
 
 if __name__ == "__main__":
     main()

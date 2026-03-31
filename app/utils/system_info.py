@@ -1,39 +1,95 @@
-import socket
-import logging
-from .command_runner import run_powershell
+"""
+Coleta de informações detalhadas do sistema para Dashboard e Relatórios.
+"""
 
-def get_current_hostname():
-    """Retorna o nome atual do computador."""
+import socket
+import platform
+import os
+import json
+import logging
+from ..utils.command_runner import run_powershell
+
+logger = logging.getLogger("WindowsProvisioningAssistant")
+
+
+def get_current_hostname() -> str:
     return socket.gethostname()
 
-def get_network_adapters():
-    """Retorna uma lista de interfaces de rede ativas (Ethernet/Wi-Fi)."""
-    logger = logging.getLogger("WindowsProvisioningAssistant")
-    # Comando PowerShell para pegar interfaces físicas
-    cmd = "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, InterfaceDescription, Status | ConvertTo-Json"
-    
-    result = run_powershell(cmd)
-    if result["success"] and result["output"]:
-        import json
-        try:
-            adapters = json.loads(result["output"])
-            # Se retornar apenas um objeto, transforma em lista
-            if isinstance(adapters, dict):
-                adapters = [adapters]
-            return adapters
-        except Exception as e:
-            logger.error(f"Erro ao parsear adaptadores de rede: {e}")
-            return []
+
+def get_windows_version() -> str:
+    return platform.version()
+
+
+def get_full_system_info() -> dict:
+    """Coleta informações completas do sistema via PowerShell."""
+    info = {
+        "hostname": get_current_hostname(),
+        "windows_version": get_windows_version(),
+        "username": os.getenv("USERNAME", ""),
+        "cpu": "", "ram_gb": "", "model": "",
+        "serial": "", "domain": "", "ip": "",
+    }
+    try:
+        ps = """
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $os = Get-CimInstance Win32_OperatingSystem
+        $bios = Get-CimInstance Win32_BIOS
+        $net = Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.PrefixOrigin -ne 'WellKnown'} | Select-Object -First 1
+        @{
+            Model       = $cs.Model
+            Manufacturer = $cs.Manufacturer
+            RAM         = [math]::Round($cs.TotalPhysicalMemory/1GB, 1)
+            CPU         = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+            Serial      = $bios.SerialNumber
+            Domain      = $cs.Domain
+            IP          = $net.IPAddress
+            WinCaption  = $os.Caption
+            WinBuild    = $os.BuildNumber
+        } | ConvertTo-Json
+        """
+        result = run_powershell(ps)
+        if result["success"] and result["output"]:
+            data = json.loads(result["output"])
+            info.update({
+                "model":      data.get("Model", ""),
+                "manufacturer": data.get("Manufacturer", ""),
+                "ram_gb":     str(data.get("RAM", "")),
+                "cpu":        data.get("CPU", ""),
+                "serial":     data.get("Serial", ""),
+                "domain":     data.get("Domain", ""),
+                "ip":         data.get("IP", ""),
+                "win_caption": data.get("WinCaption", ""),
+                "win_build":  data.get("WinBuild", ""),
+            })
+    except Exception as e:
+        logger.warning(f"[SystemInfo] Erro ao coletar info do sistema: {e}")
+    return info
+
+
+def get_network_adapters() -> list:
+    """Retorna adaptadores de rede ativos."""
+    try:
+        cmd = ("Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | "
+               "Select-Object Name,InterfaceDescription,Status | ConvertTo-Json")
+        result = run_powershell(cmd)
+        if result["success"] and result["output"]:
+            data = json.loads(result["output"])
+            if isinstance(data, dict):
+                data = [data]
+            return data
+    except Exception as e:
+        logger.warning(f"[SystemInfo] Erro ao listar adaptadores: {e}")
     return []
 
-def get_adapter_ip_info(adapter_name):
+
+def get_adapter_ip_info(adapter_name: str) -> dict:
     """Retorna detalhes de IP de um adaptador específico."""
-    cmd = f"Get-NetIPAddress -InterfaceAlias '{adapter_name}' -AddressFamily IPv4 | Select-Object IPAddress, PrefixLength | ConvertTo-Json"
-    result = run_powershell(cmd)
-    if result["success"] and result["output"]:
-        import json
-        try:
+    try:
+        cmd = (f"Get-NetIPAddress -InterfaceAlias '{adapter_name}' -AddressFamily IPv4 "
+               f"| Select-Object IPAddress,PrefixLength | ConvertTo-Json")
+        result = run_powershell(cmd)
+        if result["success"] and result["output"]:
             return json.loads(result["output"])
-        except:
-            return None
-    return None
+    except Exception:
+        pass
+    return {}
