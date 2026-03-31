@@ -170,6 +170,36 @@ class DashboardFrame(ctk.CTkFrame):
         ctk.CTkLabel(card_hw, text=f"RAM: {info['ram_gb']} GB", text_color=settings.TEXT_MUTED).pack()
         ctk.CTkLabel(card_hw, text=f"Rede: {info['ip']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
+class Toast(ctk.CTkToplevel):
+    """Notificação temporária estilo Toast."""
+    def __init__(self, message, type="info", duration=5000):
+        super().__init__()
+        self.overrideredirect(True) # Remove bordas da janela
+        
+        # Cores baseadas no tipo
+        bg_color = settings.SUCCESS_COLOR if type == "success" else settings.ERROR_COLOR if type == "error" else settings.INFO_COLOR
+        
+        self.configure(fg_color=bg_color)
+        
+        # Layout
+        label = ctk.CTkLabel(self, text=message, font=ctk.CTkFont(weight="bold"), 
+                            padx=20, pady=10, text_color="white")
+        label.pack()
+        
+        # Posicionamento (Canto inferior direito)
+        self.update_idletasks()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        x = self.winfo_screenwidth() - w - 20
+        y = self.winfo_screenheight() - h - 60
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        
+        # Sempre no topo
+        self.attributes("-topmost", True)
+        
+        # Auto-destruição
+        self.after(duration, self.destroy)
+
 class TaskItem(ctk.CTkFrame):
     """Componente para cada item da lista de provisionamento (Accordion)."""
     def __init__(self, parent, task_id, label, has_inputs=False):
@@ -518,20 +548,16 @@ class SecurityFrame(ctk.CTkFrame):
         ctk.CTkLabel(fw_box, text="🔥 Firewall do Windows", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
         
         profiles = [("Domain", "🌐 Domínio"), ("Private", "🏠 Privada"), ("Public", "📋 Pública")]
-        self.fw_switches = {}
+        self.fw_btns = {}
         
         for pid, label in profiles:
             f = ctk.CTkFrame(fw_box, fg_color="transparent")
             f.pack(fill="x", padx=20, pady=5)
             ctk.CTkLabel(f, text=label).pack(side="left")
             
-            btn_off = ctk.CTkButton(f, text="Desativar", width=80, fg_color="#c0392b", hover_color="#a93226", 
-                                   command=lambda p=pid: self.toggle_fw(p, False))
-            btn_off.pack(side="right", padx=5)
-            
-            btn_on = ctk.CTkButton(f, text="Ativar", width=80, fg_color="#27ae60", hover_color="#229954",
-                                  command=lambda p=pid: self.toggle_fw(p, True))
-            btn_on.pack(side="right", padx=5)
+            btn = ctk.CTkButton(f, text="Verificando...", width=120)
+            btn.pack(side="right", padx=5)
+            self.fw_btns[pid] = btn
 
         # 3. Acesso Remoto e Outros
         extra_box = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
@@ -545,23 +571,42 @@ class SecurityFrame(ctk.CTkFrame):
 
     def update_status_loop(self):
         """Atualiza os indicadores de status na interface."""
+        if not self.winfo_exists(): return
+
+        # 1. Update Defender Status
         from app.services.defender_service import get_defender_status
-        status = get_defender_status()
-        if status and self.winfo_exists():
-            enabled = status.get("RealTimeProtectionEnabled", False)
+        def_status = get_defender_status()
+        if def_status:
+            enabled = def_status.get("RealTimeProtectionEnabled", False)
             text = "PROTEÇÃO ATIVA" if enabled else "PROTEÇÃO DESATIVADA"
             color = settings.SUCCESS_COLOR if enabled else settings.ERROR_COLOR
             self.lbl_def_status.configure(text=text, text_color=color)
         
+        # 2. Update Firewall Buttons
+        from app.services.firewall_service import get_firewall_status
+        fw_status_list = get_firewall_status()
+        # Converte lista de dicts para dict simples
+        fw_map = {item['Name']: item['Enabled'] for item in fw_status_list} if isinstance(fw_status_list, list) else {}
+
+        for profile, btn in self.fw_btns.items():
+            is_on = fw_map.get(profile, False)
+            btn_text = "Desativar" if is_on else "Ativar"
+            btn_color = "#c0392b" if is_on else "#27ae60"
+            btn_hover = "#a93226" if is_on else "#229954"
+            
+            btn.configure(text=btn_text, fg_color=btn_color, hover_color=btn_hover,
+                         command=lambda p=profile, s=is_on: self.toggle_fw(p, not s))
+        
         if self.winfo_exists():
-            self.after(10000, self.update_status_loop) # Atualiza a cada 10s
+            self.after(5000, self.update_status_loop) # Atualiza a cada 5s
 
     def toggle_fw(self, profile, enabled):
         from app.services.firewall_service import set_firewall_profile_status
         def run():
             res = set_firewall_profile_status(profile, enabled)
             if self.winfo_exists():
-                self.after(0, lambda: messagebox.showinfo("Firewall", res["message"]))
+                self.after(0, lambda: Toast(res["message"], "success" if res["success"] else "error"))
+                self.after(500, self.update_status_loop) # Força refresh rápido
         threading.Thread(target=run, daemon=True).start()
 
     def update_defender_signatures(self):
@@ -570,7 +615,7 @@ class SecurityFrame(ctk.CTkFrame):
             self.controller.update_log("Atualizando definições do Defender...")
             res = update_defender()
             if self.winfo_exists():
-                self.after(0, lambda: messagebox.showinfo("Defender", res["message"]))
+                self.after(0, lambda: Toast(res["message"], "success" if res["success"] else "error"))
         threading.Thread(target=run, daemon=True).start()
 
     def run_defender_scan(self):
@@ -579,7 +624,7 @@ class SecurityFrame(ctk.CTkFrame):
             self.controller.update_log("Iniciando verificação rápida do Defender...")
             res = run_quick_scan()
             if self.winfo_exists():
-                self.after(0, lambda: messagebox.showinfo("Defender", res["message"]))
+                self.after(0, lambda: Toast(res["message"], "success" if res["success"] else "error"))
         threading.Thread(target=run, daemon=True).start()
 
     def run_task(self, task_id):
@@ -589,7 +634,7 @@ class SecurityFrame(ctk.CTkFrame):
             def run():
                 res = func()
                 if self.winfo_exists():
-                    self.after(0, lambda: messagebox.showinfo("Segurança", res["message"]))
+                    self.after(0, lambda: Toast(res["message"], "success" if res["success"] else "error"))
             threading.Thread(target=run, daemon=True).start()
 
 class ReportFrame(ctk.CTkFrame):

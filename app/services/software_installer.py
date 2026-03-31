@@ -29,14 +29,23 @@ def install_software(package_id: str, package_name: str) -> dict:
         return {"task_name": f"Instalar {package_name}", "success": False,
                 "message": msg, "errors": [msg], "executed_commands": []}
 
-    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements --locale pt-BR'
+    # Tenta com locale pt-BR e via fonte winget para evitar avisos de MS Store
+    cmd = f'winget install --id "{package_id}" --source winget --silent --accept-package-agreements --accept-source-agreements --locale pt-BR'
     result = run_powershell(cmd, timeout=600)
     
-    # Se falhar, tenta reparar fontes e tenta mais uma vez
+    # Se falhar especificamente por não achar o instalador (comum quando o locale pt-BR não está no manifesto)
+    # ou se for erro de fonte, tentamos o comando padrão (sem locale e sem fonte fixa)
     if not result["success"]:
-        repair_winget_sources()
-        logger.info(f"[Software] Retentando instalação de {package_name}...")
-        result = run_powershell(cmd, timeout=600)
+        # Se for erro de idioma ou fonte, tentamos o comando mais genérico
+        logger.info(f"[Software] Tentando modo de compatibilidade para {package_name}...")
+        cmd_fallback = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements'
+        result = run_powershell(cmd_fallback, timeout=600)
+        
+        # Se ainda falhar, tenta o reparo de fontes e uma última vez
+        if not result["success"]:
+            repair_winget_sources()
+            logger.info(f"[Software] Retentando instalação final de {package_name}...")
+            result = run_powershell(cmd_fallback, timeout=600)
 
     success = result["success"]
     if success:
