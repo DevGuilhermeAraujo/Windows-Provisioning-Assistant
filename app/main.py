@@ -1,47 +1,59 @@
 """
 Windows Provisioning Assistant - Ponto de entrada principal.
 
-Este arquivo verifica os privilégios de administrador, inicializa o logger
-e abre a interface gráfica.
+Verifica privilégios de administrador, inicializa o logger e abre a GUI.
+Se a elevação for bloqueada, o app ainda abre com avisos nas ações que precisam de admin.
 """
 
 import sys
 import os
 
-# Adiciona o diretório raiz do projeto ao path para imports relativos
+# Adiciona o diretório raiz ao path para imports absolutos
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.utils.admin import is_admin, run_as_admin
 from app.utils.logger import setup_logger
-import customtkinter as ctk
 
 
 def main():
     """Função principal de inicialização."""
 
-    # 1. Verificar privilégios de administrador
-    if not is_admin():
-        print("[AVISO] Não está rodando como Administrador. Tentando elevar privilégios...")
-        run_as_admin()
-        # Se chegou aqui, já pediu elevação e precisa encerrar o processo atual
-        sys.exit(0)
+    # 1. Tentar elevar privilégios se necessário
+    admin = is_admin()
 
-    # 2. Inicializar o Logger (sem callback de GUI ainda - a GUI inicializará o seu próprio)
+    if not admin:
+        print("[AVISO] Sem privilégios de Administrador. Tentando elevar...")
+        elevated = run_as_admin()
+
+        if elevated:
+            # Elevação solicitada com sucesso — encerra o processo atual
+            # O novo processo elevado continuará a execução
+            sys.exit(0)
+        else:
+            # Elevação bloqueada (GPO, UAC restritivo, etc.)
+            # Continua a execução em modo limitado com aviso na interface
+            print("[AVISO] Elevação bloqueada ou negada. Abrindo em modo limitado.")
+
+    # 2. Inicializar Logger
     logger = setup_logger()
     logger.info("=" * 60)
-    logger.info(f"Windows Provisioning Assistant iniciando...")
+    logger.info("Windows Provisioning Assistant iniciando...")
     logger.info(f"Usuário: {os.getenv('USERNAME', 'desconhecido')}")
-    logger.info(f"Executando como Administrador: {is_admin()}")
+    logger.info(f"Executando como Administrador: {admin}")
+    if not admin:
+        logger.warning(
+            "MODO LIMITADO: sem privilégios de admin. "
+            "Ações que exigem admin irão falhar com mensagem de erro."
+        )
     logger.info("=" * 60)
 
-    # 3. Configurar tema e iniciar interface gráfica
+    # 3. Configurar CustomTkinter e abrir GUI
+    import customtkinter as ctk
     ctk.set_appearance_mode("Dark")
     ctk.set_default_color_theme("blue")
 
-    # Import aqui para garantir que o logger já foi configurado
     from app.gui import App
-
-    app = App()
+    app = App(is_admin=admin)
     logger.info("Interface gráfica aberta com sucesso.")
     app.mainloop()
     logger.info("Aplicação encerrada pelo usuário.")

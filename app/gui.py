@@ -17,26 +17,41 @@ from .reports.report_generator import generate_report
 from .config import settings
 
 class App(ctk.CTk):
-    def __init__(self):
+    def __init__(self, is_admin: bool = True):
         super().__init__()
 
-        # Configurações básicas da janela
-        self.title(f"{settings.APP_NAME} v{settings.APP_VERSION}")
+        self.is_admin = is_admin
+
+        # Título com indicação de modo
+        admin_label = "" if is_admin else " [MODO LIMITADO - Sem Admin]"
+        self.title(f"{settings.APP_NAME} v{settings.APP_VERSION}{admin_label}")
         self.geometry(f"{settings.WINDOW_WIDTH}x{settings.WINDOW_HEIGHT}")
-        
-        # Configuração de grid 1x2 (Sidebar e Content)
+
+        # Layout principal: 2 colunas, 3 linhas (aviso, conteúdo, log)
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)  # row 1 = conteúdo principal
 
         # Variáveis de estado
-        self.execution_log_data = [] # Armazena histórico para o relatório
-        
+        self.execution_log_data = []
+
         # Inicializar Logger com callback para a interface
         self.logger = setup_logger(gui_callback=self.update_log_box)
 
+        # --- BANNER DE AVISO (somente sem admin) ---
+        if not self.is_admin:
+            self.warning_bar = ctk.CTkFrame(self, fg_color="#7d3c00", height=35, corner_radius=0)
+            self.warning_bar.grid(row=0, column=0, columnspan=2, sticky="ew")
+            self.warning_bar.grid_propagate(False)
+            ctk.CTkLabel(
+                self.warning_bar,
+                text="⚠️  Executando SEM privilégios de Administrador. Ações do sistema irão falhar. Feche e rode como Admin.",
+                text_color="#FFD700",
+                font=ctk.CTkFont(size=12, weight="bold")
+            ).pack(side="left", padx=10, pady=5)
+
         # --- SIDEBAR ---
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
-        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid(row=1, column=0, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(6, weight=1)
 
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Windows\nProvisioning", font=ctk.CTkFont(size=20, weight="bold"))
@@ -71,7 +86,7 @@ class App(ctk.CTk):
 
         # --- LOG SECTION (BOTTOM) ---
         self.log_frame = ctk.CTkFrame(self, height=200)
-        self.log_frame.grid(row=1, column=1, sticky="nsew", padx=20, pady=(0, 20))
+        self.log_frame.grid(row=2, column=1, sticky="nsew", padx=20, pady=(0, 20))
         self.log_frame.grid_columnconfigure(0, weight=1)
         self.log_frame.grid_rowconfigure(1, weight=1)
 
@@ -205,15 +220,15 @@ class App(ctk.CTk):
         self.frame_domain.grid_forget()
         self.frame_user.grid_forget()
 
-        # Mostrar o selecionado
+        # Mostrar o selecionado (row=1 para respeitar o banner no row=0)
         if name == "hostname":
-            self.frame_hostname.grid(row=0, column=1, sticky="nsew")
+            self.frame_hostname.grid(row=1, column=1, sticky="nsew")
         elif name == "network":
-            self.frame_network.grid(row=0, column=1, sticky="nsew")
+            self.frame_network.grid(row=1, column=1, sticky="nsew")
         elif name == "domain":
-            self.frame_domain.grid(row=0, column=1, sticky="nsew")
+            self.frame_domain.grid(row=1, column=1, sticky="nsew")
         elif name == "user":
-            self.frame_user.grid(row=0, column=1, sticky="nsew")
+            self.frame_user.grid(row=1, column=1, sticky="nsew")
 
     def toggle_network_fields(self):
         state = "disabled" if self.check_dhcp.get() else "normal"
