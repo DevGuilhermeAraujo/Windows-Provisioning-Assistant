@@ -39,7 +39,7 @@ Transformar o provisionamento manual de 40 minutos em um clique de 5 minutos, ga
    ```
 2. Execute a aplicação (modo Admin recomendado):
    ```bash
-   python app/main.py
+   python run.py
    ```
 
 ## 📦 Como Gerar o Executável

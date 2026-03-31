@@ -171,34 +171,60 @@ class DashboardFrame(ctk.CTkFrame):
         ctk.CTkLabel(card_hw, text=f"Rede: {info['ip']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
 class Toast(ctk.CTkToplevel):
-    """Notificação temporária estilo Toast."""
-    def __init__(self, message, type="info", duration=5000):
+    """Notificação temporária estilo Toast Premium com transparência e animação."""
+    def __init__(self, message, type="info", duration=3500):
         super().__init__()
-        self.overrideredirect(True) # Remove bordas da janela
-        
-        # Cores baseadas no tipo
-        bg_color = settings.SUCCESS_COLOR if type == "success" else settings.ERROR_COLOR if type == "error" else settings.INFO_COLOR
-        
-        self.configure(fg_color=bg_color)
-        
-        # Layout
-        label = ctk.CTkLabel(self, text=message, font=ctk.CTkFont(weight="bold"), 
-                            padx=20, pady=10, text_color="white")
-        label.pack()
-        
-        # Posicionamento (Canto inferior direito)
-        self.update_idletasks()
-        w = self.winfo_width()
-        h = self.winfo_height()
-        x = self.winfo_screenwidth() - w - 20
-        y = self.winfo_screenheight() - h - 60
-        self.geometry(f"{w}x{h}+{x}+{y}")
-        
-        # Sempre no topo
+        self.overrideredirect(True)
+        self.attributes("-alpha", 0.0)  # Inicia invisível para animação
         self.attributes("-topmost", True)
         
-        # Auto-destruição
-        self.after(duration, self.destroy)
+        # Truque de transparência para Windows
+        self.config(background="#010101")
+        self.attributes("-transparentcolor", "#010101")
+        
+        # Cores e Ícones
+        icons = {"success": "✅", "error": "❌", "info": "ℹ️", "warning": "⚠️"}
+        bg_color = settings.SUCCESS_COLOR if type == "success" else settings.ERROR_COLOR if type == "error" else settings.INFO_COLOR
+        icon = icons.get(type, "ℹ️")
+
+        # Container Arredondado
+        self.frame = ctk.CTkFrame(self, corner_radius=20, fg_color=bg_color, border_width=1, border_color="#ffffff")
+        self.frame.pack(padx=10, pady=10)
+        
+        # Conteúdo
+        content = ctk.CTkFrame(self.frame, fg_color="transparent")
+        content.pack(padx=15, pady=8)
+        
+        ctk.CTkLabel(content, text=icon, font=ctk.CTkFont(size=18)).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(content, text=message, font=ctk.CTkFont(size=13, weight="bold"), 
+                    text_color="white").pack(side="left")
+        
+        # Posicionamento Dinâmico (Canto inferior direito)
+        self.update_idletasks()
+        w, h = self.winfo_width(), self.winfo_height()
+        x = self.winfo_screenwidth() - w - 40
+        y = self.winfo_screenheight() - h - 80
+        self.geometry(f"+{x}+{y}")
+        
+        # Animação de Fade-In
+        self.fade_in()
+        
+        # Auto-destruição com Fade-Out
+        self.after(duration, self.fade_out)
+
+    def fade_in(self):
+        curr_alpha = self.attributes("-alpha")
+        if curr_alpha < 0.95:
+            self.attributes("-alpha", curr_alpha + 0.1)
+            self.after(20, self.fade_in)
+
+    def fade_out(self):
+        curr_alpha = self.attributes("-alpha")
+        if curr_alpha > 0:
+            self.attributes("-alpha", curr_alpha - 0.1)
+            self.after(20, self.fade_out)
+        else:
+            self.destroy()
 
 class TaskItem(ctk.CTkFrame):
     """Componente para cada item da lista de provisionamento (Accordion)."""
