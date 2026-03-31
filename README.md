@@ -49,5 +49,9 @@ pyinstaller --noconfirm build.spec
 ```
 O executável será gerado na pasta `dist/WindowsProvisioningAssistant`.
 
----
-*Desenvolvido para automação profissional de TI.*
+
+## 👨‍💻 Autor
+
+Desenvolvido por Guilherme Araujo
+📌 Desenvolvedor / TI
+🔗 LinkedIn: (https://www.linkedin.com/in/guilherme-araujo-b2b6a8164/)
