@@ -34,8 +34,10 @@ def run_powershell(command: str, timeout: int = 30) -> dict:
                 _log_info(f"[PS] OK: {stdout[:200]}")
             return {"success": True, "output": stdout, "error": None}
         else:
-            _log_error(f"[PS] Erro (código {result.returncode}): {stderr[:300]}")
-            return {"success": False, "output": stdout, "error": stderr}
+            # Se não houver stderr, tentamos pegar o stdout como erro (comum em winget)
+            err = stderr if stderr else stdout
+            _log_error(f"[PS] Erro (código {result.returncode}): {err[:300]}")
+            return {"success": False, "output": stdout, "error": err}
 
     except subprocess.TimeoutExpired:
         msg = f"PowerShell excedeu o tempo limite ({timeout}s)."

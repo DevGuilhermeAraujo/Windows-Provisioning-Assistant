@@ -177,6 +177,7 @@ class TaskItem(ctk.CTkFrame):
         self.task_id = task_id
         self.has_inputs = has_inputs
         self.expanded = False
+        self.inputs = {} # Inicializa sempre para evitar AttributeError
         
         # Grid layout
         self.grid_columnconfigure(1, weight=1)
@@ -194,8 +195,6 @@ class TaskItem(ctk.CTkFrame):
             
             # Frame de Inputs (Escondido por padrão)
             self.input_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
-            # Não damos grid ainda
-            self.inputs = {} 
         else:
             ctk.CTkLabel(self, text="").grid(row=0, column=2, padx=10)
 

@@ -1,6 +1,7 @@
 """Serviço de instalação de softwares via winget."""
 
 import logging
+import json
 from app.utils.command_runner import run_powershell
 from app.config import settings
 
@@ -22,7 +23,7 @@ def install_software(package_id: str, package_name: str) -> dict:
         return {"task_name": f"Instalar {package_name}", "success": False,
                 "message": msg, "errors": [msg], "executed_commands": []}
 
-    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements'
+    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements --upgrade'
     result = run_powershell(cmd, timeout=600)
     msg = (f"{package_name} instalado com sucesso."
            if result["success"] else f"Erro ao instalar {package_name}: {result['error']}")
@@ -62,7 +63,6 @@ def list_installed() -> list:
     """Lista softwares instalados via winget."""
     result = run_powershell("winget list --source winget | ConvertTo-Csv | ConvertFrom-Csv | ConvertTo-Json")
     if result["success"] and result["output"]:
-        import json
         try:
             return json.loads(result["output"])
         except Exception:
