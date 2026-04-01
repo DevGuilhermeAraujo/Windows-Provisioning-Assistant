@@ -154,10 +154,20 @@ class InstallAppsTask(TaskBase):
                 "executed_commands": [],
                 "errors": [],
             }
-        # Aceita tanto lista de nomes amigaveis quanto IDs winget vindos do profile.
-        id_to_name = {pkg_id: name for name, pkg_id in settings.WINGET_PACKAGES.items()}
-        normalized = [id_to_name.get(item, item) for item in packages]
-        return software_installer.install_multiple(normalized)
+        
+        # O contexto deve fornecer os IDs dos pacotes Winget (ex: Google.Chrome)
+        result = software_installer.install_multiple(packages)
+        success = result.get("success", False)
+        msg_out = "Softwares instalados com sucesso!" if success else "Ocorreram erros durante a instalacao dos softwares."
+        
+        return {
+            "task_name": self.name,
+            "success": success,
+            "message": msg_out,
+            "details": result.get("details", {}),
+            "executed_commands": [],
+            "errors": [] if success else ["Falha em um ou mais pacotes. Veja o log detalhado."],
+        }
 
 
 class CleanupTask(TaskBase):

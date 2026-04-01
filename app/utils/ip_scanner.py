@@ -1,161 +1,171 @@
-"""
-Scanner de rede com ping paralelo e leitura da tabela ARP.
-Identifica IPs ocupados e sugerem IPs livres na subrede.
-"""
-
+import platform
 import subprocess
-import ipaddress
 import socket
+import threading
+import ipaddress
+import re
 import logging
-import concurrent.futures
-from typing import List, Dict
+import time
 
-from app.config import settings
+logger = logging.getLogger(__name__)
 
-logger = logging.getLogger("WindowsProvisioningAssistant")
-
-
-def ping_host(ip: str, timeout: float = None) -> bool:
-    """Faz um único ping e retorna True se o host responder."""
-    t = timeout or settings.SCAN_TIMEOUT
+def get_current_network_info():
+    """Retorna IP, Máscara, Gateway e Nome do Adaptador (via PowerShell/ipconfig ou socket)."""
+    # Simplificado usando psutil se disponivel ou socket (dummy implementation for demonstration or subprocess)
     try:
-        result = subprocess.run(
-            ["ping", "-n", "1", "-w", str(int(t * 1000)), str(ip)],
-            capture_output=True, text=True, timeout=t + 1
-        )
-        return result.returncode == 0
+        if platform.system() == "Windows":
+            result = subprocess.run(["ipconfig", "/all"], capture_output=True, text=True, encoding='cp850', errors='replace')
+            output = result.stdout
+            
+            adapter_name = "Ethernet"
+            ip = ""
+            mask = ""
+            gateway = ""
+            
+            # Very basic parse
+            current_adapter = ""
+            for line in output.split('\n'):
+                line = line.strip()
+                if line.endswith(':'):
+                    current_adapter = line[:-1]
+                if "IPv4" in line or "IP Address" in line:
+                    match = re.search(r'\d+\.\d+\.\d+\.\d+', line)
+                    if match and not ip:
+                        ip = match.group()
+                        adapter_name = current_adapter
+                if "Subnet Mask" in line or "M\u00e1scara de Sub-rede" in line or "Máscara" in line:
+                    match = re.search(r'\d+\.\d+\.\d+\.\d+', line)
+                    if match and not mask:
+                        mask = match.group()
+                if "Default Gateway" in line or "Gateway Padr\u00e3o" in line or "Gateway Padrão" in line:
+                    match = re.search(r'\d+\.\d+\.\d+\.\d+', line)
+                    if match and not gateway:
+                        gateway = match.group()
+                        
+            return {
+                "ip": ip or "127.0.0.1",
+                "mask": mask or "255.255.255.0",
+                "gateway": gateway or "127.0.0.1",
+                "adapter_name": adapter_name
+            }
+    except Exception as e:
+        logger.error(f"Erro ao obter rede atual: {e}")
+        
+    return {"ip": "127.0.0.1", "mask": "255.255.255.0", "gateway": "", "adapter_name": "Loopback"}
+
+def calculate_subnet_range(ip, mask):
+    """Calcula a lista de IPs a partir de ip e mask."""
+    try:
+        network = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+        return [str(ip) for ip in network.hosts()]
+    except Exception as e:
+        logger.error(f"Erro ao calcular range de subrede: {e}")
+        return []
+
+def ping_ip(ip):
+    """Retorna True se o IP responder ao ping."""
+    try:
+        param = "-n" if platform.system().lower() == "windows" else "-c"
+        # ping rapido (1 pacote, timeout 300ms)
+        command = ["ping", param, "1", "-w", "300", ip] if platform.system().lower() == "windows" else ["ping", param, "1", "-W", "1", ip]
+        res = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return res.returncode == 0
     except Exception:
         return False
 
+def scan_network_threads(range_ips):
+    """Realiza ping paralelo nos IPs."""
+    active_ips = []
+    lock = threading.Lock()
+    
+    def worker(ips_chunk):
+        for ip in ips_chunk:
+            if ping_ip(ip):
+                with lock:
+                    active_ips.append(ip)
 
-def resolve_hostname(ip: str) -> str:
-    """Tenta resolver o hostname de um IP, retorna string vazia se falhar."""
+    threads = []
+    chunk_size = max(1, len(range_ips) // 50)
+    
+    for i in range(0, len(range_ips), chunk_size):
+        chunk = range_ips[i:i + chunk_size]
+        t = threading.Thread(target=worker, args=(chunk,))
+        threads.append(t)
+        t.start()
+        
+    for t in threads:
+        t.join()
+        
+    return active_ips
+
+def get_arp_table():
+    """Recupera a tabela ARP e suas entradas."""
     try:
-        return socket.gethostbyaddr(ip)[0]
-    except Exception:
-        return ""
-
-
-def get_arp_table() -> Dict[str, str]:
-    """Lê a tabela ARP do Windows e retorna {ip: mac}."""
-    result: Dict[str, str] = {}
-    try:
-        out = subprocess.run(
-            ["arp", "-a"], capture_output=True, text=True, timeout=5
-        ).stdout
-        for line in out.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].count(".") == 3:
-                ip = parts[0].strip()
-                mac = parts[1].strip() if len(parts) > 1 else ""
-                result[ip] = mac
+        res = subprocess.run(["arp", "-a"], capture_output=True, text=True, encoding='cp850', errors='replace')
+        ips = []
+        for line in res.stdout.split('\n'):
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F-]+)', line)
+            if match:
+                ips.append(match.group(1))
+        return list(set(ips))
     except Exception as e:
-        logger.warning(f"[Scanner] Erro ao ler tabela ARP: {e}")
-    return result
+        logger.error(f"Erro no arp table: {e}")
+        return []
 
+def merge_results(ping_results, arp_results):
+    """Unifica e remove duplicatas."""
+    return sorted(list(set(ping_results + arp_results)), key=lambda ip: socket.inet_aton(ip))
 
-def scan_network(network_cidr: str,
-                 on_progress=None,
-                 on_found=None) -> Dict:
-    """
-    Faz scan completo de uma subrede CIDR.
-    Retorna dicionário com IPs ocupados, livres e sugestões.
+def suggest_free_ips(occupied_ips, range_ips):
+    """Retorna os primeiros 10 IPs nao ocupados, ignorando os ultimos da rede ou broadcast."""
+    free = []
+    occupied_set = set(occupied_ips)
+    for ip_str in range_ips:
+        if ip_str not in occupied_set:
+            if not ip_str.endswith(".1") and not ip_str.endswith(".254") and not ip_str.endswith(".255"):
+                free.append(ip_str)
+        if len(free) >= 10:
+            break
+    return free
 
-    Args:
-        network_cidr: ex '192.168.1.0/24'
-        on_progress:  callback(percent: int)
-        on_found:     callback(ip: str, is_up: bool)
-    """
+def scan_network(cidr_or_range=None):
+    """Funcao chamada pelo GUI. Retorna dicionário com os resultados."""
     try:
-        network = ipaddress.IPv4Network(network_cidr, strict=False)
-    except ValueError as e:
-        logger.error(f"[Scanner] CIDR inválido: {e}")
-        return {"error": str(e)}
-
-    hosts = list(network.hosts())
-    total = len(hosts)
-    if total == 0:
-        return {"error": "Rede sem hosts."}
-
-    # Lê ARP primeiro (mais rápido que ping)
-    arp = get_arp_table()
-
-    occupied: List[str] = []
-    free: List[str] = []
-    scanned = 0
-
-    def check(ip_obj):
-        nonlocal scanned
-        ip = str(ip_obj)
-        is_up = ip in arp or ping_host(ip)
-        hostname = resolve_hostname(ip) if is_up else ""
-        scanned += 1
-        if on_progress:
-            on_progress(int(scanned / total * 100))
-        if on_found:
-            on_found(ip, is_up, hostname)
-        return ip, is_up, hostname
-
-    results = []
-    max_workers = min(settings.SCAN_THREADS, total)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(check, h): h for h in hosts}
-        for f in concurrent.futures.as_completed(futures):
+        net_info = get_current_network_info()
+        base_ip = net_info["ip"]
+        mask = net_info["mask"]
+        
+        # Para forçar no range correto
+        if cidr_or_range and "/" in cidr_or_range:
             try:
-                results.append(f.result())
-            except Exception:
-                pass
-
-    results.sort(key=lambda x: ipaddress.IPv4Address(x[0]))
-
-    for ip, is_up, hostname in results:
-        if is_up:
-            occupied.append({"ip": ip, "hostname": hostname,
-                             "mac": arp.get(ip, "")})
+                network = ipaddress.IPv4Network(cidr_or_range, strict=False)
+                range_ips = [str(ip) for ip in network.hosts()]
+            except:
+                range_ips = calculate_subnet_range(base_ip, mask)
         else:
-            free.append(ip)
+            range_ips = calculate_subnet_range(base_ip, mask)
+        
+        if not range_ips:
+            return {"error": "Não foi possível calcular o range."}
 
-    # Sugerir últimos 50 IPs livres do range (mais prováveis para estações novas)
-    suggestions = [ip for ip in free[-50:] if ip not in [o["ip"] for o in occupied]]
-
-    return {
-        "network": network_cidr,
-        "total_hosts": total,
-        "occupied": occupied,
-        "free": free,
-        "suggestions": suggestions[:20],
-        "scan_complete": True,
-    }
-
-
-def detect_local_network() -> Dict:
-    """Detecta a rede local atual do computador."""
-    try:
-        # Obtém IP local via PowerShell
-        result = subprocess.run(
-            ["powershell.exe", "-ExecutionPolicy", "Bypass",
-             "-Command",
-             "Get-NetIPAddress -AddressFamily IPv4 | "
-             "Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | "
-             "Select-Object IPAddress, PrefixLength | ConvertTo-Json"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            import json
-            data = json.loads(result.stdout)
-            if isinstance(data, dict):
-                data = [data]
-            for entry in data:
-                ip = entry.get("IPAddress", "")
-                prefix = entry.get("PrefixLength", 24)
-                if ip and not ip.startswith("127.") and not ip.startswith("169."):
-                    network = ipaddress.IPv4Network(f"{ip}/{prefix}", strict=False)
-                    return {
-                        "ip": ip,
-                        "prefix": prefix,
-                        "cidr": str(network),
-                        "gateway": str(list(network.hosts())[0]),
-                    }
+        # Rodar scan e arp
+        ping_ativos = scan_network_threads(range_ips)
+        arp_ativos = get_arp_table()
+        
+        # Alguns ARPs podem estar fora do range, mas vamos focar no range de IP atual
+        arp_in_range = [ip for ip in arp_ativos if ip in range_ips]
+        
+        ocupados = merge_results(ping_ativos, arp_in_range)
+        livres = [ip for ip in range_ips if ip not in ocupados]
+        sugestoes = suggest_free_ips(ocupados, range_ips)
+        
+        return {
+            "network": f"{base_ip}/{mask}",
+            "occupied": ocupados,
+            "free": livres,
+            "suggestions": sugestoes,
+            "net_info": net_info
+        }
     except Exception as e:
-        logger.warning(f"[Scanner] Falha ao detectar rede local: {e}")
-    return {"ip": "", "prefix": 24, "cidr": "", "gateway": ""}
+        logger.error(f"Failed scan_network: {e}")
+        return {"error": str(e)}

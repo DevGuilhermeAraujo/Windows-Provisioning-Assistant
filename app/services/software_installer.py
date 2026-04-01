@@ -1,94 +1,92 @@
 """Serviço de instalação de softwares via winget."""
 
 import logging
-import json
 from app.utils.command_runner import run_powershell
 from app.config import settings
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
 
-def _check_winget() -> bool:
+def is_winget_available() -> bool:
     """Verifica se o winget está disponível no sistema."""
     result = run_powershell("winget --version")
-    return result["success"]
+    return result.get("success", False)
 
 
-def repair_winget_sources():
-    """Tenta resetar as fontes do winget para resolver problemas de download."""
-    logger.warning("[Software] Detectado problema de fonte. Tentando resetar fontes do winget...")
-    run_powershell("winget source reset --force")
-    run_powershell("winget source update")
-
-def install_software(package_id: str, package_name: str) -> dict:
-    """Instala um pacote via winget pelo seu ID."""
-    logger.info(f"[Software] Instalando: {package_name} ({package_id})")
-    if not _check_winget():
+def install_package(package_id: str) -> dict:
+    """Instala um pacote via winget pelo seu ID (ex: Google.Chrome).
+    Retorna sucesso/falha, stdout/stderr, e comando executado.
+    """
+    logger.info(f"[Software] Instalando pacote: {package_id}")
+    if not is_winget_available():
         msg = "winget não encontrado. Instale o App Installer pela Microsoft Store."
         logger.error(f"[Software] {msg}")
-        return {"task_name": f"Instalar {package_name}", "success": False,
-                "message": msg, "errors": [msg], "executed_commands": []}
+        return {
+            "success": False,
+            "stdout": "",
+            "stderr": msg,
+            "command": "winget --version"
+        }
 
-    # Tenta com locale pt-BR e via fonte winget para evitar avisos de MS Store
-    cmd = f'winget install --id "{package_id}" --source winget --silent --accept-package-agreements --accept-source-agreements --locale pt-BR'
-    result = run_powershell(cmd, timeout=600)
+    # Comando base para instalação com aceite de termos
+    cmd = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements'
+    result = run_powershell(cmd, timeout=900)
     
-    # Se falhar especificamente por não achar o instalador (comum quando o locale pt-BR não está no manifesto)
-    # ou se for erro de fonte, tentamos o comando padrão (sem locale e sem fonte fixa)
-    if not result["success"]:
-        # Se for erro de idioma ou fonte, tentamos o comando mais genérico
-        logger.info(f"[Software] Tentando modo de compatibilidade para {package_name}...")
-        cmd_fallback = f'winget install --id "{package_id}" --silent --accept-package-agreements --accept-source-agreements'
-        result = run_powershell(cmd_fallback, timeout=600)
-        
-        # Se ainda falhar, tenta o reparo de fontes e uma última vez
-        if not result["success"]:
-            repair_winget_sources()
-            logger.info(f"[Software] Retentando instalação final de {package_name}...")
-            result = run_powershell(cmd_fallback, timeout=600)
-
-    success = result["success"]
+    success = result.get("success", False)
     if success:
-        msg = f"{package_name} instalado/atualizado com sucesso."
-        logger.info(f"[Software] {msg}")
+        logger.info(f"[Software] Instalação concluída: {package_id}")
     else:
-        msg = f"Erro ao instalar {package_name}. Verifique sua conexão ou se o app já está em uso."
-        logger.error(f"[Software] {msg}: {result['error']}")
-    
+        logger.error(f"[Software] Erro na instalação de {package_id}")
+
     return {
-        "task_name": f"Instalar {package_name}", "success": success,
-        "message": msg, "errors": [] if success else [result["error"]],
-        "executed_commands": [cmd], "details": {"package_id": package_id},
+        "success": success,
+        "stdout": result.get("output", ""),
+        "stderr": result.get("error", ""),
+        "command": cmd
     }
 
 
-def install_multiple(packages: list) -> dict:
-    """Instala uma lista de softwares. packages = lista de nomes do settings.WINGET_PACKAGES."""
-    results = []
+def install_multiple(packages: list[str]) -> dict:
+    """Instala uma lista de pacotes (passando os IDs)."""
+    results = {}
     all_success = True
-    for name in packages:
-        pkg_id = settings.WINGET_PACKAGES.get(name)
-        if not pkg_id:
-            logger.warning(f"[Software] Pacote desconhecido: {name}")
-            continue
-        res = install_software(pkg_id, name)
-        results.append(res)
+    
+    for pkg_id in packages:
+        res = install_package(pkg_id)
+        results[pkg_id] = res
         if not res["success"]:
             all_success = False
-    msg = "Todos os softwares instalados." if all_success else "Alguns softwares falharam na instalação."
+            
     return {
-        "task_name": "Instalar Softwares", "success": all_success,
-        "message": msg, "details": {"results": results},
-        "executed_commands": [], "errors": [r["message"] for r in results if not r["success"]],
+        "success": all_success,
+        "details": results
     }
 
 
-def list_installed() -> list:
-    """Lista softwares instalados via winget."""
-    result = run_powershell("winget list --source winget | ConvertTo-Csv | ConvertFrom-Csv | ConvertTo-Json")
-    if result["success"] and result["output"]:
-        try:
-            return json.loads(result["output"])
-        except Exception:
-            pass
-    return []
+def list_installed_packages() -> list[str]:
+    """Retorna uma lista de IDs de pacotes instalados via winget."""
+    if not is_winget_available():
+        return []
+        
+    cmd = "winget list"
+    result = run_powershell(cmd, timeout=30)
+    if not result.get("success", False):
+        return []
+        
+    lines = result.get("output", "").split('\n')
+    installed_ids = []
+    
+    # Simple parsing to extract the ID column (usually the second column)
+    # This is a naive parsing since winget list output is fixed-width
+    for line in lines[2:]:
+        if len(line.strip()) > 0:
+            parts = line.split()
+            if len(parts) >= 2:
+                # The ID could be parts[1] or parts[-2] depending on name length
+                # An easier way is to check for '.' which signifies an ID
+                for p in parts:
+                    if '.' in p and not p.replace('.', '').isdigit():
+                        installed_ids.append(p)
+                        break
+                        
+    return list(set(installed_ids))

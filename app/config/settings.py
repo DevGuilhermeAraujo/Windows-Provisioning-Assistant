@@ -42,10 +42,8 @@ WINGET_PACKAGES = {
     "7-Zip":            "7zip.7zip",
     "AnyDesk":          "AnyDeskSoftwareGmbH.AnyDesk",
     "VS Code":          "Microsoft.VisualStudioCode",
-    "Notepad++":        "Notepad++.Notepad++",
     "Git":              "Git.Git",
-    "VLC":              "VideoLAN.VLC",
-    "Adobe Reader":     "Adobe.Acrobat.Reader.64-bit",
-    "TeamViewer":       "TeamViewer.TeamViewer",
-    "WinRAR":           "RARLab.WinRAR",
+    "Notepad++":        "Notepad++.Notepad++",
+    "Python 3.11":      "Python.Python.3.11",
+    "Node.js":          "OpenJS.NodeJS",
 }

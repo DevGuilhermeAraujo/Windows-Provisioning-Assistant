@@ -585,29 +585,67 @@ class NetworkFrame(ctk.CTkFrame):
         scan_bar.grid(row=1, column=0, sticky="ew", pady=10)
         
         ctk.CTkLabel(scan_bar, text="Range CIDR:").pack(side="left", padx=10)
-        self.entry_cidr = ctk.CTkEntry(scan_bar, placeholder_text="192.168.1.0/24")
-        self.entry_cidr.pack(side="left", padx=10, fill="x", expand=True)
+        self.entry_cidr = ctk.CTkEntry(scan_bar, placeholder_text="Ex: 192.168.1.0/24", width=200)
+        self.entry_cidr.pack(side="left", padx=10, pady=10)
         
-        self.btn_scan = ctk.CTkButton(scan_bar, text="🔍 Scanner de IPs", width=120, command=self.run_scanner)
+        self.btn_scan = ctk.CTkButton(scan_bar, text="🔍 Scan IPs em uso", width=150, command=self.run_scanner)
         self.btn_scan.pack(side="left", padx=10)
+
+        # Sugestao de IP Control
+        sug_bar = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        sug_bar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         
-        # Results Table (Simulated with Text)
-        self.results_box = ctk.CTkTextbox(self, height=300)
-        self.results_box.grid(row=2, column=0, sticky="nsew", pady=10)
-        self.results_box.insert("end", "Inicie um scan para ver IPs livres/ocupados...")
+        ctk.CTkLabel(sug_bar, text="Sugestoes de IP Livre:").pack(side="left", padx=10)
+        self.sug_var = tk.StringVar(value="")
+        self.combo_sug = ctk.CTkComboBox(sug_bar, values=["(Vazio)"], variable=self.sug_var, state="readonly", width=180)
+        self.combo_sug.pack(side="left", padx=10, pady=10)
+        
+        btn_use_ip = ctk.CTkButton(sug_bar, text="Usar IP sugerido", width=140, command=self.use_suggested_ip)
+        btn_use_ip.pack(side="left", padx=10)
+        
+        # Results View
+        self.results_box = ctk.CTkTextbox(self, height=350)
+        self.results_box.grid(row=3, column=0, sticky="nsew", pady=10)
+        self.results_box.insert("end", "Aperte 'Scan IPs em uso' para detectar a subrede atual e buscar IPs livres/ocupados...")
+
+    def use_suggested_ip(self):
+        ip = self.sug_var.get()
+        if not ip or ip == "(Vazio)" or "Erro" in ip:
+            messagebox.showwarning("Aviso", "Nenhum IP valido selecionado.")
+            return
+            
+        # Tenta injetar na aba de Provisionamento
+        prov_frame = self.controller.get_frame("provisioning")
+        if prov_frame:
+            # Seta o IP da entry "static_ip" item
+            prov_frame._set_task_input_value("static_ip", "ip", ip)
+            messagebox.showinfo("Sucesso", f"IP {ip} preenchido na aba de Provisionamento.")
+        else:
+            # Caso a aba nao esteja criada/instanciada ou a logica do get_frame falhe
+            # Podemos tentar forcando a troca de aba primeiro
+            self.controller.select_frame("provisioning")
+            self.after(200, lambda: self._delayed_inject(ip))
+
+    def _delayed_inject(self, ip):
+        prov_frame = self.controller.get_frame("provisioning")
+        if prov_frame:
+            prov_frame._set_task_input_value("static_ip", "ip", ip)
+            prov_frame._set_task_input_value("static_ip", "use_dhcp", "false")
+            messagebox.showinfo("Sucesso", f"IP {ip} inserido!")
 
     def run_scanner(self):
         cidr = self.entry_cidr.get()
-        if not cidr:
-            messagebox.showwarning("Aviso", "Informe um range CIDR (ex: 192.168.1.0/24)")
-            return
             
         self.btn_scan.configure(state="disabled")
+        self.combo_sug.configure(values=["Carregando..."])
+        self.sug_var.set("Carregando...")
         self.results_box.delete("1.0", "end")
-        self.results_box.insert("end", f"Iniciando scan em {cidr}...")
+        
+        target_str = f" em {cidr}" if cidr else " na subrede atual"
+        self.results_box.insert("end", f"Iniciando scan{target_str}...\nIsso pode levar alguns segundos dependendo da rede.\n")
         
         def do_scan():
-            res = ip_scanner.scan_network(cidr)
+            res = ip_scanner.scan_network(cidr if cidr else None)
             if self.winfo_exists():
                 self.after(0, lambda: self.show_results(res))
             
@@ -618,13 +656,32 @@ class NetworkFrame(ctk.CTkFrame):
         self.results_box.delete("1.0", "end")
         if "error" in res:
             self.results_box.insert("end", f"Erro: {res['error']}")
+            self.combo_sug.configure(values=["(Erro)"])
+            self.sug_var.set("(Erro)")
             return
             
-        self.results_box.insert("end", f"Scan Completo em {res['network']}\n")
-        self.results_box.insert("end", f"Ocupados: {len(res['occupied'])} | Livres: {len(res['free'])}\n\n")
-        self.results_box.insert("end", "Sugestões de IPs Livres:\n")
-        for ip in res['suggestions']:
-            self.results_box.insert("end", f"  - {ip}\n")
+        self.results_box.insert("end", f"=== Resultado do Scan ({res['network']}) ===\n")
+        
+        ocupados = res.get('occupied', [])
+        livres = res.get('free', [])
+        sugestoes = res.get('suggestions', [])
+        
+        self.results_box.insert("end", f"IPs Ocupados Encontrados: {len(ocupados)}\n")
+        self.results_box.insert("end", f"IPs Livres (estimativa): {len(livres)}\n\n")
+        
+        self.results_box.insert("end", "[ TABELA DE IPS OCUPADOS ]\n")
+        for i, ip in enumerate(ocupados, 1):
+            self.results_box.insert("end", f"{i:03d} - {ip}\n")
+            
+        if sugestoes:
+            self.combo_sug.configure(values=sugestoes)
+            self.sug_var.set(sugestoes[0])
+            self.results_box.insert("end", f"\n[ SUGESTOES DE IPS LIVRES ]\n")
+            for ip in sugestoes:
+                self.results_box.insert("end", f"  -> {ip}\n")
+        else:
+            self.combo_sug.configure(values=["(Nenhuma)"])
+            self.sug_var.set("(Nenhuma)")
 
 class DomainFrame(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -683,8 +740,17 @@ class SoftwareFrame(ctk.CTkFrame):
     def create_widgets(self):
         ctk.CTkLabel(self, text="Instalação de Softwares", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 20))
         
-        self.scroll = ctk.CTkScrollableFrame(self, height=400)
-        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        # Grid definition
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        
+        # Lista de softwares (Esquerda)
+        list_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        list_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        
+        self.scroll = ctk.CTkScrollableFrame(list_frame, height=400, fg_color="transparent")
+        self.scroll.pack(fill="both", expand=True, padx=10, pady=10)
         
         self.sw_vars = {}
         for name in settings.WINGET_PACKAGES.keys():
@@ -697,27 +763,50 @@ class SoftwareFrame(ctk.CTkFrame):
             cb.pack(anchor="w", padx=20, pady=5)
             self.sw_vars[name] = var
 
-        self.btn_install = ctk.CTkButton(self, text="📦 Instalar Selecionados", command=self.install_sw)
-        self.btn_install.grid(row=2, column=0, pady=20)
+        self.btn_install = ctk.CTkButton(list_frame, text="📦 Instalar Selecionados", command=self.install_sw)
+        self.btn_install.pack(pady=20)
+        
+        # Logs em tempo real (Direita)
+        log_frame = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        log_frame.grid(row=1, column=1, sticky="nsew")
+        ctk.CTkLabel(log_frame, text="Progresso de Instalação", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        
+        self.sw_log_area = ctk.CTkTextbox(log_frame, state="disabled")
+        self.sw_log_area.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
     def save_state(self, name, var):
         """Salva o estado no controller para não perder ao trocar de aba."""
         self.controller.software_state[name] = var.get()
+        
+    def add_sw_log(self, msg):
+        self.sw_log_area.configure(state="normal")
+        self.sw_log_area.insert("end", f"{msg}\n")
+        self.sw_log_area.see("end")
+        self.sw_log_area.configure(state="disabled")
+        self.controller.update_log(msg) # Envia tambem para o log geral
 
     def install_sw(self):
-        to_install = [name for name, var in self.sw_vars.items() if var.get()]
+        # Mapeia nome selecionado para ID do pacote winget
+        to_install = [settings.WINGET_PACKAGES[name] for name, var in self.sw_vars.items() if var.get()]
         if not to_install:
             messagebox.showwarning("Aviso", "Selecione ao menos um software.")
             return
             
         self.btn_install.configure(state="disabled")
+        self.sw_log_area.configure(state="normal")
+        self.sw_log_area.delete("1.0", "end")
+        self.sw_log_area.configure(state="disabled")
+        self.add_sw_log("Iniciando instalacao em lote...")
+        
         from app.services.software_installer import install_multiple
         
         def run():
             res = install_multiple(to_install)
             if self.winfo_exists():
                 self.after(0, lambda: self.btn_install.configure(state="normal"))
-                self.after(0, lambda: messagebox.showinfo("Resultado", res["message"]))
+                msg = "Sucesso!" if res["success"] else "Concluido com erros."
+                self.after(0, lambda: self.add_sw_log(f"\nFinal: {msg}"))
+                self.after(0, lambda: messagebox.showinfo("Resultado", msg))
             
         threading.Thread(target=run, daemon=True).start()
 
