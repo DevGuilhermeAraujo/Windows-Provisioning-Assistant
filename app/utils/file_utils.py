@@ -1,104 +1,43 @@
-"""Utilitários de arquivos, diretórios e JSON."""
-
-import os
 import json
-import shutil
+import os
 import logging
-from datetime import datetime
 
-logger = logging.getLogger("WindowsProvisioningAssistant")
+logger = logging.getLogger(__name__)
 
-
-def ensure_directories(*paths: str):
-    """Cria os diretórios especificados se não existirem."""
-    for path in paths:
-        if not os.path.exists(path):
-            os.makedirs(path)
-            logger.debug(f"[FileUtils] Diretório criado: {path}")
-
-
-def load_json(filepath: str, default=None):
-    """Lê e retorna o conteúdo de um arquivo JSON. Retorna default em caso de erro."""
-    if default is None:
-        default = {}
+def load_json(path, default=None):
+    """Carrega dados de um arquivo JSON."""
+    if not os.path.exists(path):
+        logger.warning(f"Arquivo não encontrado: {path}")
+        return default
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except FileNotFoundError:
-        logger.warning(f"[FileUtils] Arquivo não encontrado: {filepath}")
-        return default
     except json.JSONDecodeError as e:
-        logger.error(f"[FileUtils] JSON inválido em {filepath}: {e}")
+        logger.error(f"Erro ao decodificar JSON em {path}: {e}")
+        return default
+    except Exception as e:
+        logger.error(f"Erro inesperado ao ler {path}: {e}")
         return default
 
-
-def save_json(filepath: str, data: dict, indent: int = 4) -> bool:
-    """Salva um dicionário como JSON. Retorna True se sucesso."""
-    try:
-        ensure_directories(os.path.dirname(filepath))
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent, ensure_ascii=False)
-        return True
-    except Exception as e:
-        logger.error(f"[FileUtils] Erro ao salvar JSON em {filepath}: {e}")
-        return False
-
-
-def validate_profiles_data(data) -> tuple[bool, str]:
-    """Valida estrutura de profiles.json no formato lista de perfis."""
-    required_fields = {
-        "name",
-        "hostname_prefix",
-        "domain_name",
-        "dns_primary",
-        "dns_secondary",
-        "use_dhcp",
-        "default_gateway",
-        "default_mask",
-        "default_packages",
-        "tasks",
-    }
+def validate_profiles_data(data):
+    """Valida se os dados de perfis estão no formato esperado."""
     if not isinstance(data, list):
-        return False, "Formato invalido: profiles.json deve ser uma lista."
-    for idx, profile in enumerate(data):
+        return False, "Data must be a list"
+    for profile in data:
         if not isinstance(profile, dict):
-            return False, f"Perfil na posicao {idx} nao e um objeto valido."
-        missing = [field for field in required_fields if field not in profile]
-        if missing:
-            return False, f"Perfil '{profile.get('name', idx)}' sem campos obrigatorios: {', '.join(missing)}"
-        if not isinstance(profile.get("tasks"), list):
-            return False, f"Perfil '{profile.get('name', idx)}' possui 'tasks' invalido."
-        if not isinstance(profile.get("default_packages"), list):
-            return False, f"Perfil '{profile.get('name', idx)}' possui 'default_packages' invalido."
+            return False, "Each profile must be a dictionary"
+        if "name" not in profile:
+            return False, "Each profile must have a 'name' field"
     return True, ""
 
-
-def timestamped_filename(prefix: str, extension: str, directory: str) -> str:
-    """Gera um caminho de arquivo com timestamp. Ex: output/reports/report_2026-03-31_10-00-00.json"""
-    ensure_directories(directory)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"{prefix}_{timestamp}.{extension}"
-    return os.path.join(directory, filename)
-
-
-def open_folder(path: str):
-    """Abre uma pasta no Explorer do Windows."""
+def save_json(path, data):
+    """Salva dados em um arquivo JSON."""
     try:
-        ensure_directories(path)
-        os.startfile(os.path.abspath(path))
+        # Garante que o diretório exista
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
     except Exception as e:
-        logger.error(f"[FileUtils] Não foi possível abrir a pasta {path}: {e}")
-
-
-def backup_file(source_path: str, backup_dir: str) -> str:
-    """Cria uma cópia de segurança de um arquivo. Retorna o caminho do backup."""
-    try:
-        ensure_directories(backup_dir)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = os.path.basename(source_path)
-        dest = os.path.join(backup_dir, f"{filename}.{timestamp}.bak")
-        shutil.copy2(source_path, dest)
-        return dest
-    except Exception as e:
-        logger.error(f"[FileUtils] Erro ao criar backup de {source_path}: {e}")
-        return ""
+        logger.error(f"Erro ao salvar JSON em {path}: {e}")
+        return False

@@ -1,26 +1,46 @@
 [
-    {
-        "name": "Escritorio",
-        "hostname_prefix": "ESC",
-        "domain_name": "empresa.local",
-        "dns_primary": "192.168.0.2",
-        "dns_secondary": "8.8.8.8",
-        "use_dhcp": false,
-        "default_gateway": "192.168.0.1",
-        "default_mask": "255.255.255.0",
-        "default_packages": ["Google.Chrome", "7zip.7zip"],
-        "tasks": ["hostname", "static_ip", "time_sync", "firewall_on", "rdp_on", "install_apps", "cleanup"]
-    },
-    {
-        "name": "Loja",
-        "hostname_prefix": "LOJ",
-        "domain_name": "",
-        "dns_primary": "8.8.8.8",
-        "dns_secondary": "1.1.1.1",
-        "use_dhcp": true,
-        "default_gateway": "",
-        "default_mask": "255.255.255.0",
-        "default_packages": ["Google.Chrome"],
-        "tasks": ["hostname", "static_ip", "time_sync", "firewall_on", "install_apps", "cleanup"]
-    }
+  {
+    "name": "Escritorio",
+    "hostname_prefix": "ESC",
+    "domain_name": "empresa.local",
+    "dns_primary": "192.168.0.2",
+    "dns_secondary": "8.8.8.8",
+    "use_dhcp": false,
+    "default_gateway": "192.168.0.1",
+    "default_mask": "255.255.255.0",
+    "default_packages": [
+      "Google.Chrome",
+      "7zip.7zip"
+    ],
+    "tasks": [
+      "hostname",
+      "static_ip",
+      "time_sync",
+      "firewall_on",
+      "rdp_on",
+      "install_apps",
+      "cleanup"
+    ]
+  },
+  {
+    "name": "Loja",
+    "hostname_prefix": "LOJ",
+    "domain_name": "loja.local",
+    "dns_primary": "8.8.8.8",
+    "dns_secondary": "1.1.1.1",
+    "use_dhcp": true,
+    "default_gateway": "",
+    "default_mask": "",
+    "default_packages": [
+      "Google.Chrome",
+      "AnyDesk.AnyDesk"
+    ],
+    "tasks": [
+      "hostname",
+      "time_sync",
+      "firewall_on",
+      "install_apps",
+      "cleanup"
+    ]
+  }
 ]
