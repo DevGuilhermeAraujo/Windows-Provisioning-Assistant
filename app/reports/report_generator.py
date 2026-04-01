@@ -21,6 +21,10 @@ def generate_full_report(pipeline_results: dict, output_format: str = "json"):
     # 1. Coletar estado atual do sistema para o cabeçalho
     sys_info = system_info.get_full_system_info()
     
+    # 2. Coletar Inventário Corporativo (Fase 5)
+    from app.services import inventory_service
+    inventory_data = inventory_service.get_full_inventory()
+    
     report_data = {
         "metadata": {
             "version": settings.APP_VERSION,
@@ -28,6 +32,7 @@ def generate_full_report(pipeline_results: dict, output_format: str = "json"):
             "execution_id": pipeline_results.get("execution_id")
         },
         "system_info": sys_info,
+        "inventory": inventory_data,
         "execution_summary": {
             "status": pipeline_results.get("status"),
             "success_count": pipeline_results.get("success_count"),

@@ -158,7 +158,12 @@ class DashboardFrame(ctk.CTkFrame):
         threading.Thread(target=self.load_info, daemon=True).start()
 
     def load_info(self):
-        info = system_info.get_full_system_info()
+        from app.services import inventory_service
+        # Mostra loading enquanto consulta (pode demorar no PowerShell)
+        if self.winfo_exists():
+            self.after(0, lambda: self.controller.update_log("Coletando inventario corporativo... aguarde."))
+            
+        info = inventory_service.get_full_inventory()
         if self.winfo_exists():
             self.after(0, lambda: self.display_info(info))
 
@@ -167,21 +172,23 @@ class DashboardFrame(ctk.CTkFrame):
         card_sys = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
         card_sys.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
         ctk.CTkLabel(card_sys, text="Computador", font=ctk.CTkFont(weight="bold")).pack(pady=10)
-        ctk.CTkLabel(card_sys, text=f"Host: {info['hostname']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_sys, text=f"Serial: {info['serial']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_sys, text=f"Dominio: {info['domain']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_sys, text=f"SO: {info['win_caption']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
+        ctk.CTkLabel(card_sys, text=f"Host: {info.get('hostname', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"Serial: {info.get('serial_number', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"Modelo: {info.get('model', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"SO: {info.get('os_version', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"Dominio: {info.get('domain_status', 'N/A')}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
-        # Cartão de Hardware
+        # Cartão de Rede/Hardware
         card_hw = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
         card_hw.grid(row=1, column=1, padx=10, pady=10, sticky="nsew")
-        ctk.CTkLabel(card_hw, text="Hardware", font=ctk.CTkFont(weight="bold")).pack(pady=10)
-        ctk.CTkLabel(card_hw, text=f"CPU: {info['cpu']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"RAM: {info['ram_gb']} GB", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"Adaptador: {info['adapter']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"IP: {info['ip']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"Gateway: {info['gateway']}", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"DNS: {info['dns_servers']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
+        ctk.CTkLabel(card_hw, text="Rede & Hardware", font=ctk.CTkFont(weight="bold")).pack(pady=10)
+        
+        net = info.get("network", {})
+        ctk.CTkLabel(card_hw, text=f"IP: {net.get('ip', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"Gateway: {net.get('gateway', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"DNS: {net.get('dns', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"CPU: {info.get('cpu', 'N/A')}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"RAM: {info.get('ram', 'N/A')}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
 class Toast(ctk.CTkToplevel):
     """Notificação temporária estilo Toast Premium com transparência e animação."""
