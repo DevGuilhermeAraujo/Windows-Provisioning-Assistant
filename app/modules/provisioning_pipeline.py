@@ -1,124 +1,156 @@
-"""
-Pipeline de execução de tarefas de provisionamento.
-Orquestra a execução de múltiplas tasks, registra no DB e reporta progresso.
-"""
-
 import logging
 import time
-from datetime import datetime
-from typing import List, Dict, Any, Callable
+from typing import Any, Callable
 
-from app.modules.task_registry import get_task_function
 from app.database import db
+from app.modules.task_registry import get_task
 from app.utils import system_info
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
+STRICT = "STRICT"
+SAFE = "SAFE"
+
+
 class ProvisioningPipeline:
     def __init__(self, execution_id: int = None):
         self.execution_id = execution_id
-        self.results = []
-        self.on_progress: Callable[[int, str], None] = None
-        self.on_task_complete: Callable[[str, bool, str], None] = None
+        self.results: list[dict[str, Any]] = []
+        self.ordered_tasks: list[str] = [
+            "hostname",
+            "static_ip",
+            "time_sync",
+            "perf_plan",
+            "firewall_on",
+            "rdp_on",
+            "install_apps",
+            "cleanup",
+        ]
 
-    def set_callbacks(self, on_progress=None, on_task_complete=None):
-        self.on_progress = on_progress
-        self.on_task_complete = on_task_complete
+    def _emit(self, callbacks: dict, callback_name: str, *args) -> None:
+        cb = callbacks.get(callback_name) if callbacks else None
+        if callable(cb):
+            cb(*args)
 
-    def execute_tasks(self, task_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Executa uma lista de tarefas sequencialmente.
-        
-        Args:
-            task_list: Lista de dicionários {'id': id_da_task, 'args': [], 'kwargs': {}}
-        """
-        total_tasks = len(task_list)
+    def _sanitize_for_log(self, context: dict[str, Any]) -> dict[str, Any]:
+        safe = dict(context)
+        if "domain_password" in safe and safe["domain_password"]:
+            safe["domain_password"] = "***"
+        return safe
+
+    def run(
+        self,
+        selected_tasks: list[str],
+        context: dict[str, Any],
+        mode: str,
+        callbacks: dict | None = None,
+    ) -> dict[str, Any]:
+        mode = (mode or SAFE).upper()
+        if mode not in {STRICT, SAFE}:
+            mode = SAFE
+
+        task_order = [t for t in self.ordered_tasks if t in selected_tasks]
+        total_tasks = len(task_order)
         if total_tasks == 0:
-            return {"status": "EMPTY", "results": []}
+            return {
+                "execution_id": self.execution_id,
+                "status": "EMPTY",
+                "success_count": 0,
+                "failed_count": 0,
+                "total_tasks": 0,
+                "results": [],
+                "summary": "Nenhuma task selecionada.",
+            }
 
-        logger.info(f"[Pipeline] Iniciando execução de {total_tasks} tarefas...")
-        
-        # Se não tiver execution_id, cria um novo no DB
         if not self.execution_id:
             username = system_info.get_full_system_info().get("username", "unknown")
             computer_name = system_info.get_current_hostname()
             self.execution_id = db.start_execution(username, computer_name)
 
+        self.results = []
         success_count = 0
-        
-        for i, task_info in enumerate(task_list):
-            task_id = task_info.get("id")
-            params = task_info.get("params", {})
-            kwargs = task_info.get("kwargs", params) # Se kwargs não existir, usa params
-            args = task_info.get("args", [])
-            
-            task_func = get_task_function(task_id)
-            
-            # Notifica progresso
-            if self.on_progress:
-                self.on_progress(int((i / total_tasks) * 100), f"Executando {task_id}...")
+        failed_count = 0
+        safe_context = self._sanitize_for_log(context)
+        self._emit(callbacks or {}, "on_log", f"Contexto inicial: {safe_context}")
 
-            if not task_func:
-                error_msg = f"Task '{task_id}' não encontrada no registro."
-                logger.error(f"[Pipeline] {error_msg}")
+        for index, task_name in enumerate(task_order):
+            self._emit(callbacks or {}, "on_task_start", task_name)
+            self._emit(
+                callbacks or {},
+                "on_progress",
+                int((index / total_tasks) * 100),
+            )
+            task = get_task(task_name)
+
+            if not task:
                 res = {
-                    "task_name": task_id,
+                    "task_name": task_name,
                     "success": False,
-                    "message": error_msg,
-                    "errors": [error_msg]
+                    "message": f"Task '{task_name}' nao encontrada.",
+                    "details": {},
+                    "executed_commands": [],
+                    "errors": [f"Task '{task_name}' nao encontrada."],
                 }
             else:
-                start_time = time.time()
+                start = time.time()
                 try:
-                    # Executa a função do serviço
-                    res = task_func(*args, **kwargs)
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"[Pipeline] Crash na task '{task_id}': {error_msg}")
+                    res = task.run(context)
+                except Exception as exc:
+                    err = str(exc)
                     res = {
-                        "task_name": task_id,
+                        "task_name": task_name,
                         "success": False,
-                        "message": f"Erro inesperado: {error_msg}",
-                        "errors": [error_msg]
+                        "message": f"Erro inesperado na task '{task_name}'.",
+                        "details": {},
+                        "executed_commands": [],
+                        "errors": [err],
                     }
-                
-                duration_ms = int((time.time() - start_time) * 1000)
-                res["duration_ms"] = duration_ms
+                res["duration_ms"] = int((time.time() - start) * 1000)
 
-            # Registra no DB
             db.log_task(
                 self.execution_id,
-                res.get("task_name", task_id),
-                res.get("success", False),
+                res.get("task_name", task_name),
+                bool(res.get("success")),
                 res.get("message", ""),
                 "; ".join(res.get("errors", [])),
-                res.get("duration_ms", 0)
+                res.get("duration_ms", 0),
+            )
+
+            self.results.append(res)
+            self._emit(callbacks or {}, "on_task_finish", task_name, res)
+            self._emit(
+                callbacks or {},
+                "on_log",
+                f"[{task_name}] {'OK' if res.get('success') else 'ERRO'} - {res.get('message', '')}",
             )
 
             if res.get("success"):
                 success_count += 1
-            
-            self.results.append(res)
-            
-            if self.on_task_complete:
-                self.on_task_complete(task_id, res.get("success"), res.get("message"))
+            else:
+                failed_count += 1
+                if mode == STRICT:
+                    self._emit(callbacks or {}, "on_log", "Modo STRICT: pipeline interrompido por falha.")
+                    break
 
-        # Finaliza execução no DB
-        final_status = "SUCCESS" if success_count == total_tasks else "PARTIAL"
-        if success_count == 0: 
-            final_status = "FAILED"
-            
+        final_status = "SUCCESS" if failed_count == 0 else ("FAILED" if success_count == 0 else "PARTIAL")
         db.finish_execution(self.execution_id, final_status)
-        
-        if self.on_progress:
-            self.on_progress(100, "Concluído.")
+        self._emit(callbacks or {}, "on_progress", 100)
 
-        logger.info(f"[Pipeline] Execução finalizada com status: {final_status}")
-        
+        summary = f"Pipeline concluido. Sucesso: {success_count}, Falhas: {failed_count}, Total: {len(self.results)}."
+        self._emit(callbacks or {}, "on_log", summary)
         return {
             "execution_id": self.execution_id,
             "status": final_status,
             "success_count": success_count,
-            "total_tasks": total_tasks,
-            "results": self.results
+            "failed_count": failed_count,
+            "total_tasks": len(self.results),
+            "results": self.results,
+            "summary": summary,
         }
+
+    def execute_tasks(self, task_list: list[dict[str, Any]]) -> dict[str, Any]:
+        selected_tasks = [task.get("id") for task in task_list if task.get("id")]
+        context: dict[str, Any] = {}
+        for task in task_list:
+            context.update(task.get("params", {}))
+        return self.run(selected_tasks=selected_tasks, context=context, mode=SAFE, callbacks={})

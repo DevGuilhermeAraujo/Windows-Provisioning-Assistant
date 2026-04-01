@@ -27,14 +27,18 @@ def get_full_system_info() -> dict:
         "windows_version": get_windows_version(),
         "username": os.getenv("USERNAME", ""),
         "cpu": "", "ram_gb": "", "model": "",
-        "serial": "", "domain": "", "ip": "",
+        "serial": "", "domain": "", "ip": "", "dns_servers": "", "gateway": "", "adapter": "",
     }
     try:
         ps = """
         $cs = Get-CimInstance Win32_ComputerSystem
         $os = Get-CimInstance Win32_OperatingSystem
         $bios = Get-CimInstance Win32_BIOS
-        $net = Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.PrefixOrigin -ne 'WellKnown'} | Select-Object -First 1
+        $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4Address -ne $null } | Select-Object -First 1
+        $ip = if ($cfg) { $cfg.IPv4Address.IPAddress } else { "" }
+        $gateway = if ($cfg -and $cfg.IPv4DefaultGateway) { $cfg.IPv4DefaultGateway.NextHop } else { "" }
+        $dns = if ($cfg -and $cfg.DNSServer) { ($cfg.DNSServer.ServerAddresses -join ', ') } else { "" }
+        $adapter = if ($cfg) { $cfg.InterfaceAlias } else { "" }
         @{
             Model       = $cs.Model
             Manufacturer = $cs.Manufacturer
@@ -42,7 +46,10 @@ def get_full_system_info() -> dict:
             CPU         = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
             Serial      = $bios.SerialNumber
             Domain      = $cs.Domain
-            IP          = $net.IPAddress
+            IP          = $ip
+            Gateway     = $gateway
+            DnsServers  = $dns
+            Adapter     = $adapter
             WinCaption  = $os.Caption
             WinBuild    = $os.BuildNumber
         } | ConvertTo-Json
@@ -58,6 +65,9 @@ def get_full_system_info() -> dict:
                 "serial":     data.get("Serial", ""),
                 "domain":     data.get("Domain", ""),
                 "ip":         data.get("IP", ""),
+                "gateway":    data.get("Gateway", ""),
+                "dns_servers": data.get("DnsServers", ""),
+                "adapter":    data.get("Adapter", ""),
                 "win_caption": data.get("WinCaption", ""),
                 "win_build":  data.get("WinBuild", ""),
             })

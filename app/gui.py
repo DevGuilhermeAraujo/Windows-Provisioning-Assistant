@@ -12,7 +12,7 @@ from app.utils import system_info, ip_scanner, admin, file_utils
 from app.database import db
 from app.reports import report_generator, report_templates
 from app.modules.provisioning_pipeline import ProvisioningPipeline
-from app.modules.task_registry import get_available_tasks
+from app.modules.context_builder import build_context
 
 logger = logging.getLogger("WindowsProvisioningAssistant")
 
@@ -160,6 +160,7 @@ class DashboardFrame(ctk.CTkFrame):
         ctk.CTkLabel(card_sys, text="Computador", font=ctk.CTkFont(weight="bold")).pack(pady=10)
         ctk.CTkLabel(card_sys, text=f"Host: {info['hostname']}", text_color=settings.TEXT_MUTED).pack()
         ctk.CTkLabel(card_sys, text=f"Serial: {info['serial']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_sys, text=f"Dominio: {info['domain']}", text_color=settings.TEXT_MUTED).pack()
         ctk.CTkLabel(card_sys, text=f"SO: {info['win_caption']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
         # Cartão de Hardware
@@ -168,7 +169,10 @@ class DashboardFrame(ctk.CTkFrame):
         ctk.CTkLabel(card_hw, text="Hardware", font=ctk.CTkFont(weight="bold")).pack(pady=10)
         ctk.CTkLabel(card_hw, text=f"CPU: {info['cpu']}", text_color=settings.TEXT_MUTED).pack()
         ctk.CTkLabel(card_hw, text=f"RAM: {info['ram_gb']} GB", text_color=settings.TEXT_MUTED).pack()
-        ctk.CTkLabel(card_hw, text=f"Rede: {info['ip']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
+        ctk.CTkLabel(card_hw, text=f"Adaptador: {info['adapter']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"IP: {info['ip']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"Gateway: {info['gateway']}", text_color=settings.TEXT_MUTED).pack()
+        ctk.CTkLabel(card_hw, text=f"DNS: {info['dns_servers']}", text_color=settings.TEXT_MUTED).pack(pady=(0, 10))
 
 class Toast(ctk.CTkToplevel):
     """Notificação temporária estilo Toast Premium com transparência e animação."""
@@ -303,6 +307,13 @@ class ProvisioningFrame(ctk.CTkFrame):
 
     def create_widgets(self):
         ctk.CTkLabel(self, text="Pipeline de Provisionamento", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        mode_frame = ctk.CTkFrame(self, fg_color="transparent")
+        mode_frame.grid(row=0, column=0, sticky="e")
+        self.mode_var = tk.StringVar(value="SAFE")
+        ctk.CTkLabel(mode_frame, text="Modo:").pack(side="left", padx=(0, 8))
+        ctk.CTkRadioButton(mode_frame, text="SAFE", variable=self.mode_var, value="SAFE").pack(side="left", padx=4)
+        ctk.CTkRadioButton(mode_frame, text="STRICT", variable=self.mode_var, value="STRICT").pack(side="left", padx=4)
         
         # Checklist de tarefas (Accordion)
         self.scroll = ctk.CTkScrollableFrame(self)
@@ -312,16 +323,19 @@ class ProvisioningFrame(ctk.CTkFrame):
         
         # 1. Hostname
         item_h = TaskItem(self.scroll, "hostname", "Alterar Hostname", has_inputs=True)
-        item_h.add_input("new_name", "Novo Nome:", "Ex: PC-VENDAS-01")
+        item_h.add_input("new_hostname", "Novo Nome:", "Ex: PC-VENDAS-01")
         item_h.pack(fill="x", pady=2)
         self.items["hostname"] = item_h
         
         # 2. Rede
         item_net = TaskItem(self.scroll, "static_ip", "Configurar IP Fixo", has_inputs=True)
         item_net.add_select("adapter_name", "Adaptador:", self.network_adapters)
+        item_net.add_select("use_dhcp", "Modo IP:", ["false", "true"])
         item_net.add_input("ip", "Endereço IP:", "192.168.1.50")
         item_net.add_input("mask", "Máscara:", "255.255.255.0")
         item_net.add_input("gateway", "Gateway:", "192.168.1.1")
+        item_net.add_input("dns_primary", "DNS Primário:", "8.8.8.8")
+        item_net.add_input("dns_secondary", "DNS Secundário:", "1.1.1.1")
         item_net.pack(fill="x", pady=2)
         self.items["static_ip"] = item_net
         
@@ -348,38 +362,50 @@ class ProvisioningFrame(ctk.CTkFrame):
         self.progress.set(0)
 
     def run_pipeline(self):
-        selected = []
+        selected_tasks = []
+        gui_inputs = {
+            "enable_rdp": True,
+            "enable_firewall": True,
+            "enable_high_performance": True,
+            "enable_cleanup": True,
+        }
         for tid, item in self.items.items():
             if item.var.get():
                 params = item.get_params()
-                
-                # Regras especiais de parâmetros (já coletados pelos inputs/selects)
-                if tid == "install_apps":
-                    # Pega exatamente o que foi marcado na aba lateral de Softwares
-                    params["packages"] = [name for name, selected_sw in self.controller.software_state.items() if selected_sw]
-                
-                selected.append({"id": tid, "params": params})
+                selected_tasks.append(tid)
+                gui_inputs.update(params)
 
-        if not selected:
+        gui_inputs["install_packages"] = [name for name, selected_sw in self.controller.software_state.items() if selected_sw]
+        gui_inputs["use_dhcp"] = str(gui_inputs.get("use_dhcp", "false")).lower() == "true"
+
+        if not selected_tasks:
             messagebox.showwarning("Aviso", "Selecione ao menos uma tarefa.")
             return
 
+        context = build_context(gui_inputs, {})
         self.btn_run.configure(state="disabled")
-        
+        self.controller.update_log(f"Modo de execucao: {self.mode_var.get()}")
+
         def run():
             pipe = ProvisioningPipeline()
-            pipe.set_callbacks(
-                on_progress=lambda p, m: self.update_safe(lambda: self.update_progress(p, m)),
-                on_task_complete=lambda t, s, m: self.update_safe(lambda: self.controller.update_log(f"{t}: {'OK' if s else 'ERRO'} - {m}"))
+            result = pipe.run(
+                selected_tasks=selected_tasks,
+                context=context,
+                mode=self.mode_var.get(),
+                callbacks={
+                    "on_log": lambda m: self.update_safe(lambda: self.controller.update_log(m)),
+                    "on_progress": lambda p: self.update_safe(lambda: self.update_progress(p, "Pipeline em execucao...")),
+                    "on_task_start": lambda t: self.update_safe(lambda: self.controller.update_log(f"Iniciando task: {t}")),
+                    "on_task_finish": lambda t, r: self.update_safe(lambda: self.controller.update_log(f"Finalizada task: {t} -> {'OK' if r.get('success') else 'ERRO'}")),
+                },
             )
-            pipe.execute_tasks(selected)
-            self.update_safe(self.finalize_run)
+            self.update_safe(lambda: self.finalize_run(result))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def finalize_run(self):
+    def finalize_run(self, result):
         self.btn_run.configure(state="normal")
-        messagebox.showinfo("Sucesso", "Provisionamento concluído!")
+        messagebox.showinfo("Resultado", result.get("summary", "Provisionamento concluido."))
 
     def update_safe(self, func):
         """Executa uma função na thread principal apenas se o widget ainda existir."""

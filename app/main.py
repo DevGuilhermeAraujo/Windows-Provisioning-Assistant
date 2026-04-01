@@ -16,7 +16,7 @@ def parse_args():
 def handle_silent_mode(args):
     """Executa o provisionamento em modo silencioso baseado em um perfil."""
     from app.modules.provisioning_pipeline import ProvisioningPipeline
-    from app.modules.task_registry import get_available_tasks
+    from app.modules.context_builder import build_context
     
     profiles = file_utils.load_json(settings.PROFILES_PATH)
     profile_name = args.profile
@@ -26,11 +26,21 @@ def handle_silent_mode(args):
         sys.exit(1)
         
     profile_data = profiles[profile_name]
-    tasks = [{"id": tid} for tid in profile_data.get("tasks", [])]
+    profile_tasks = profile_data.get("tasks", [])
+    mapping = {
+        "network": "static_ip",
+        "ntp": "time_sync",
+        "power_plan": "perf_plan",
+        "firewall": "firewall_on",
+        "rdp": "rdp_on",
+        "software": "install_apps",
+    }
+    tasks = [mapping.get(t, t) for t in profile_tasks]
+    context = build_context({}, profile_data)
     
     print(f"Iniciando Provisionamento Silencioso: {profile_name}")
     pipeline = ProvisioningPipeline()
-    results = pipeline.execute_tasks(tasks)
+    results = pipeline.run(selected_tasks=tasks, context=context, mode="SAFE", callbacks={})
     
     print(f"Resultado Final: {results['status']}")
     sys.exit(0 if results['status'] == 'SUCCESS' else 1)
