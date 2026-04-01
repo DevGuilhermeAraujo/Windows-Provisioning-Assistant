@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.task_base import TaskBase
+from app.config import settings
 from app.services import (
     cleanup_service,
     firewall_service,
@@ -153,7 +154,10 @@ class InstallAppsTask(TaskBase):
                 "executed_commands": [],
                 "errors": [],
             }
-        return software_installer.install_multiple(packages)
+        # Aceita tanto lista de nomes amigaveis quanto IDs winget vindos do profile.
+        id_to_name = {pkg_id: name for name, pkg_id in settings.WINGET_PACKAGES.items()}
+        normalized = [id_to_name.get(item, item) for item in packages]
+        return software_installer.install_multiple(normalized)
 
 
 class CleanupTask(TaskBase):

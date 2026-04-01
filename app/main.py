@@ -18,24 +18,19 @@ def handle_silent_mode(args):
     from app.modules.provisioning_pipeline import ProvisioningPipeline
     from app.modules.context_builder import build_context
     
-    profiles = file_utils.load_json(settings.PROFILES_PATH)
+    profiles = file_utils.load_json(settings.PROFILES_PATH, default=[])
+    ok, err = file_utils.validate_profiles_data(profiles)
+    if not ok:
+        print(f"Erro: profiles.json invalido: {err}")
+        sys.exit(1)
     profile_name = args.profile
-    
-    if profile_name not in profiles:
+
+    profile_data = next((p for p in profiles if p.get("name") == profile_name), None)
+    if not profile_data:
         print(f"Erro: Perfil '{profile_name}' não encontrado.")
         sys.exit(1)
-        
-    profile_data = profiles[profile_name]
-    profile_tasks = profile_data.get("tasks", [])
-    mapping = {
-        "network": "static_ip",
-        "ntp": "time_sync",
-        "power_plan": "perf_plan",
-        "firewall": "firewall_on",
-        "rdp": "rdp_on",
-        "software": "install_apps",
-    }
-    tasks = [mapping.get(t, t) for t in profile_tasks]
+
+    tasks = profile_data.get("tasks", [])
     context = build_context({}, profile_data)
     
     print(f"Iniciando Provisionamento Silencioso: {profile_name}")

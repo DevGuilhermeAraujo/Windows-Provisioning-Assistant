@@ -1,75 +1,26 @@
-{
-    "Escritório": {
-        "description": "Estação de trabalho padrão de escritório",
-        "hostname_prefix": "EST",
-        "use_dhcp": false,
-        "ip_base": "192.168.1.",
-        "mask": "255.255.255.0",
-        "gateway": "192.168.1.1",
-        "dns_primary": "192.168.1.1",
+[
+    {
+        "name": "Escritorio",
+        "hostname_prefix": "ESC",
+        "domain_name": "empresa.local",
+        "dns_primary": "192.168.0.2",
         "dns_secondary": "8.8.8.8",
-        "domain": "corp.local",
-        "ntp_server": "pool.ntp.org",
-        "timezone": "E. South America Standard Time",
-        "power_plan": "High Performance",
-        "softwares": ["Google Chrome", "7-Zip", "Adobe Reader"],
-        "tasks": [
-            "hostname", "network", "ntp", "power_plan",
-            "firewall", "rdp", "domain", "software", "report"
-        ]
+        "use_dhcp": false,
+        "default_gateway": "192.168.0.1",
+        "default_mask": "255.255.255.0",
+        "default_packages": ["Google.Chrome", "7zip.7zip"],
+        "tasks": ["hostname", "static_ip", "time_sync", "firewall_on", "rdp_on", "install_apps", "cleanup"]
     },
-    "Loja": {
-        "description": "PDV ou terminal de loja",
-        "hostname_prefix": "PDV",
-        "use_dhcp": true,
-        "ip_base": "",
-        "mask": "",
-        "gateway": "",
-        "dns_primary": "8.8.8.8",
-        "dns_secondary": "8.8.4.4",
-        "domain": "",
-        "ntp_server": "pool.ntp.org",
-        "timezone": "E. South America Standard Time",
-        "power_plan": "High Performance",
-        "softwares": ["Google Chrome", "7-Zip"],
-        "tasks": ["hostname", "network", "ntp", "power_plan", "firewall", "report"]
-    },
-    "Notebook": {
-        "description": "Notebook corporativo com mobilidade",
-        "hostname_prefix": "NB",
-        "use_dhcp": true,
-        "ip_base": "",
-        "mask": "",
-        "gateway": "",
+    {
+        "name": "Loja",
+        "hostname_prefix": "LOJ",
+        "domain_name": "",
         "dns_primary": "8.8.8.8",
         "dns_secondary": "1.1.1.1",
-        "domain": "corp.local",
-        "ntp_server": "pool.ntp.org",
-        "timezone": "E. South America Standard Time",
-        "power_plan": "Balanced",
-        "softwares": ["Google Chrome", "7-Zip", "VS Code", "Git"],
-        "tasks": [
-            "hostname", "network", "ntp", "domain",
-            "software", "firewall", "report"
-        ]
-    },
-    "Servidor": {
-        "description": "Servidor Windows — configuração de alta performance",
-        "hostname_prefix": "SRV",
-        "use_dhcp": false,
-        "ip_base": "192.168.1.",
-        "mask": "255.255.255.0",
-        "gateway": "192.168.1.1",
-        "dns_primary": "192.168.1.1",
-        "dns_secondary": "8.8.8.8",
-        "domain": "corp.local",
-        "ntp_server": "pool.ntp.org",
-        "timezone": "E. South America Standard Time",
-        "power_plan": "High Performance",
-        "softwares": [],
-        "tasks": [
-            "hostname", "network", "ntp", "power_plan",
-            "firewall", "rdp", "domain", "report"
-        ]
+        "use_dhcp": true,
+        "default_gateway": "",
+        "default_mask": "255.255.255.0",
+        "default_packages": ["Google.Chrome"],
+        "tasks": ["hostname", "static_ip", "time_sync", "firewall_on", "install_apps", "cleanup"]
     }
-}
+]

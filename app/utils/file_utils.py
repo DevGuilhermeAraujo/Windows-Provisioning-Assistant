@@ -44,6 +44,35 @@ def save_json(filepath: str, data: dict, indent: int = 4) -> bool:
         return False
 
 
+def validate_profiles_data(data) -> tuple[bool, str]:
+    """Valida estrutura de profiles.json no formato lista de perfis."""
+    required_fields = {
+        "name",
+        "hostname_prefix",
+        "domain_name",
+        "dns_primary",
+        "dns_secondary",
+        "use_dhcp",
+        "default_gateway",
+        "default_mask",
+        "default_packages",
+        "tasks",
+    }
+    if not isinstance(data, list):
+        return False, "Formato invalido: profiles.json deve ser uma lista."
+    for idx, profile in enumerate(data):
+        if not isinstance(profile, dict):
+            return False, f"Perfil na posicao {idx} nao e um objeto valido."
+        missing = [field for field in required_fields if field not in profile]
+        if missing:
+            return False, f"Perfil '{profile.get('name', idx)}' sem campos obrigatorios: {', '.join(missing)}"
+        if not isinstance(profile.get("tasks"), list):
+            return False, f"Perfil '{profile.get('name', idx)}' possui 'tasks' invalido."
+        if not isinstance(profile.get("default_packages"), list):
+            return False, f"Perfil '{profile.get('name', idx)}' possui 'default_packages' invalido."
+    return True, ""
+
+
 def timestamped_filename(prefix: str, extension: str, directory: str) -> str:
     """Gera um caminho de arquivo com timestamp. Ex: output/reports/report_2026-03-31_10-00-00.json"""
     ensure_directories(directory)

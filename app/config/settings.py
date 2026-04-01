@@ -19,8 +19,10 @@ BG_CARD         = "#2a2a3d"
 TEXT_MUTED      = "#a0a0b0"
 
 # Diretórios
-LOG_FILE        = "logs/app.log"
-REPORTS_DIR     = "output/reports"
+LOG_PATH        = "logs/app.log"
+OUTPUT_REPORTS_PATH = "output/reports"
+LOG_FILE        = LOG_PATH
+REPORTS_DIR     = OUTPUT_REPORTS_PATH
 EXPORTS_DIR     = "output/exports"
 BACKUPS_DIR     = "output/backups"
 DB_PATH         = "output/provisioning.db"

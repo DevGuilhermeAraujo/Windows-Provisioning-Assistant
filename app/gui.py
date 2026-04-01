@@ -39,7 +39,14 @@ class App(ctk.CTk):
         self.current_frame = None
         self.execution_history = []
         self.selected_tasks = []
-        self.profiles = file_utils.load_json(settings.PROFILES_PATH)
+        self.profile_load_error = ""
+        loaded_profiles = file_utils.load_json(settings.PROFILES_PATH, default=[])
+        ok, err = file_utils.validate_profiles_data(loaded_profiles)
+        if not ok:
+            self.profiles = []
+            self.profile_load_error = f"Perfis invalidos: {err}"
+        else:
+            self.profiles = loaded_profiles
         self.software_state = {name: False for name in settings.WINGET_PACKAGES.keys()} 
 
     def create_layout(self):
@@ -65,6 +72,8 @@ class App(ctk.CTk):
         # 4. Log Real-time (Bottom)
         self.log_area = ctk.CTkTextbox(self, height=150, font=("Consolas", 12), state="disabled")
         self.log_area.grid(row=2, column=1, sticky="ew", padx=20, pady=(0, 20))
+        if self.profile_load_error:
+            self.after(150, lambda: messagebox.showwarning("Profiles", f"Falha ao carregar profiles.json.\n{self.profile_load_error}"))
 
     def create_sidebar_content(self):
         """Popula a barra lateral com botões de navegação."""
@@ -314,10 +323,28 @@ class ProvisioningFrame(ctk.CTkFrame):
         ctk.CTkLabel(mode_frame, text="Modo:").pack(side="left", padx=(0, 8))
         ctk.CTkRadioButton(mode_frame, text="SAFE", variable=self.mode_var, value="SAFE").pack(side="left", padx=4)
         ctk.CTkRadioButton(mode_frame, text="STRICT", variable=self.mode_var, value="STRICT").pack(side="left", padx=4)
+
+        profile_bar = ctk.CTkFrame(self, fg_color=settings.BG_CARD)
+        profile_bar.grid(row=1, column=0, sticky="ew", pady=(10, 5))
+        ctk.CTkLabel(profile_bar, text="Profile:").pack(side="left", padx=(10, 8), pady=8)
+        self.profile_values = [p.get("name", "") for p in self.controller.profiles]
+        if not self.profile_values:
+            self.profile_values = ["(sem perfis)"]
+        self.profile_var = tk.StringVar(value=self.profile_values[0])
+        self.profile_combo = ctk.CTkComboBox(
+            profile_bar,
+            values=self.profile_values,
+            variable=self.profile_var,
+            width=200,
+            command=lambda _: self.apply_selected_profile(),
+        )
+        self.profile_combo.pack(side="left", padx=5, pady=8)
+        ctk.CTkButton(profile_bar, text="Salvar Profile", width=110, command=self.open_save_profile_modal).pack(side="left", padx=5)
+        ctk.CTkButton(profile_bar, text="Editar Profile", width=110, command=self.open_edit_profile_modal).pack(side="left", padx=5)
         
         # Checklist de tarefas (Accordion)
         self.scroll = ctk.CTkScrollableFrame(self)
-        self.scroll.grid(row=1, column=0, sticky="nsew", pady=10)
+        self.scroll.grid(row=2, column=0, sticky="nsew", pady=10)
         
         self.items = {}
         
@@ -355,11 +382,137 @@ class ProvisioningFrame(ctk.CTkFrame):
             self.items[tid] = item
 
         self.btn_run = ctk.CTkButton(self, text="🚀 Executar Provisionamento", height=45, fg_color=settings.ACCENT_COLOR, command=self.run_pipeline)
-        self.btn_run.grid(row=2, column=0, pady=20)
+        self.btn_run.grid(row=3, column=0, pady=20)
         
         self.progress = ctk.CTkProgressBar(self)
-        self.progress.grid(row=3, column=0, sticky="ew", pady=10)
+        self.progress.grid(row=4, column=0, sticky="ew", pady=10)
         self.progress.set(0)
+        self.apply_selected_profile()
+
+    def get_profile_by_name(self, name: str):
+        for profile in self.controller.profiles:
+            if profile.get("name") == name:
+                return profile
+        return None
+
+    def _set_task_input_value(self, task_id: str, key: str, value):
+        item = self.items.get(task_id)
+        if not item:
+            return
+        widget = item.inputs.get(key)
+        if not widget:
+            return
+        if hasattr(widget, "delete"):
+            widget.delete(0, "end")
+            if value is not None:
+                widget.insert(0, str(value))
+        elif hasattr(widget, "set"):
+            widget.set(str(value))
+
+    def apply_selected_profile(self):
+        profile = self.get_profile_by_name(self.profile_var.get())
+        if not profile:
+            return
+        self._set_task_input_value("hostname", "new_hostname", f"{profile.get('hostname_prefix', 'PC')}-01")
+        self._set_task_input_value("static_ip", "use_dhcp", "true" if profile.get("use_dhcp") else "false")
+        self._set_task_input_value("static_ip", "mask", profile.get("default_mask", ""))
+        self._set_task_input_value("static_ip", "gateway", profile.get("default_gateway", ""))
+        self._set_task_input_value("static_ip", "dns_primary", profile.get("dns_primary", ""))
+        self._set_task_input_value("static_ip", "dns_secondary", profile.get("dns_secondary", ""))
+        self.domain_name_override = profile.get("domain_name", "")
+
+        profile_tasks = set(profile.get("tasks", []))
+        for task_id, item in self.items.items():
+            item.var.set(task_id in profile_tasks)
+
+        selected_ids = set(profile.get("default_packages", []))
+        for app_name, winget_id in settings.WINGET_PACKAGES.items():
+            self.controller.software_state[app_name] = winget_id in selected_ids
+
+    def _collect_profile_from_form(self, profile_name: str) -> dict:
+        selected_tasks = [tid for tid, item in self.items.items() if item.var.get()]
+        static_params = self.items["static_ip"].get_params()
+        selected_package_ids = [
+            package_id for app_name, package_id in settings.WINGET_PACKAGES.items()
+            if self.controller.software_state.get(app_name)
+        ]
+        return {
+            "name": profile_name,
+            "hostname_prefix": (self.items["hostname"].get_params().get("new_hostname", "PC") or "PC").split("-")[0][:8],
+            "domain_name": getattr(self, "domain_name_override", ""),
+            "dns_primary": static_params.get("dns_primary", ""),
+            "dns_secondary": static_params.get("dns_secondary", ""),
+            "use_dhcp": str(static_params.get("use_dhcp", "false")).lower() == "true",
+            "default_gateway": static_params.get("gateway", ""),
+            "default_mask": static_params.get("mask", ""),
+            "default_packages": selected_package_ids,
+            "tasks": selected_tasks,
+        }
+
+    def open_save_profile_modal(self):
+        modal = ctk.CTkToplevel(self)
+        modal.title("Salvar Profile")
+        modal.geometry("420x220")
+        modal.grab_set()
+        ctk.CTkLabel(modal, text="Nome do Profile").pack(pady=(20, 5))
+        entry_name = ctk.CTkEntry(modal, width=320)
+        entry_name.pack(pady=5)
+        ctk.CTkLabel(modal, text="Dominio").pack(pady=(10, 5))
+        entry_domain = ctk.CTkEntry(modal, width=320)
+        entry_domain.insert(0, getattr(self, "domain_name_override", ""))
+        entry_domain.pack(pady=5)
+
+        def save_new_profile():
+            name = entry_name.get().strip()
+            if not name:
+                messagebox.showwarning("Aviso", "Informe um nome para o profile.")
+                return
+            self.domain_name_override = entry_domain.get().strip()
+            self.controller.profiles.append(self._collect_profile_from_form(name))
+            if file_utils.save_json(settings.PROFILES_PATH, self.controller.profiles):
+                self.refresh_profiles_ui(select_name=name)
+                modal.destroy()
+            else:
+                messagebox.showerror("Erro", "Nao foi possivel salvar o profile.")
+
+        ctk.CTkButton(modal, text="Salvar", command=save_new_profile).pack(pady=20)
+
+    def open_edit_profile_modal(self):
+        profile = self.get_profile_by_name(self.profile_var.get())
+        if not profile:
+            messagebox.showwarning("Aviso", "Selecione um profile valido para editar.")
+            return
+        modal = ctk.CTkToplevel(self)
+        modal.title("Editar Profile")
+        modal.geometry("420x220")
+        modal.grab_set()
+        ctk.CTkLabel(modal, text=f"Editando: {profile.get('name')}").pack(pady=(20, 10))
+        ctk.CTkLabel(modal, text="Dominio").pack(pady=(0, 5))
+        entry_domain = ctk.CTkEntry(modal, width=320)
+        entry_domain.insert(0, profile.get("domain_name", ""))
+        entry_domain.pack(pady=5)
+
+        def save_edit_profile():
+            self.domain_name_override = entry_domain.get().strip()
+            updated = self._collect_profile_from_form(profile.get("name", ""))
+            for idx, current in enumerate(self.controller.profiles):
+                if current.get("name") == profile.get("name"):
+                    self.controller.profiles[idx] = updated
+                    break
+            if file_utils.save_json(settings.PROFILES_PATH, self.controller.profiles):
+                self.refresh_profiles_ui(select_name=profile.get("name", ""))
+                modal.destroy()
+            else:
+                messagebox.showerror("Erro", "Nao foi possivel atualizar o profile.")
+
+        ctk.CTkButton(modal, text="Salvar Alteracoes", command=save_edit_profile).pack(pady=20)
+
+    def refresh_profiles_ui(self, select_name: str = ""):
+        self.profile_values = [p.get("name", "") for p in self.controller.profiles] or ["(sem perfis)"]
+        self.profile_combo.configure(values=self.profile_values)
+        selected = select_name if select_name in self.profile_values else self.profile_values[0]
+        self.profile_var.set(selected)
+        self.apply_selected_profile()
 
     def run_pipeline(self):
         selected_tasks = []
@@ -382,7 +535,8 @@ class ProvisioningFrame(ctk.CTkFrame):
             messagebox.showwarning("Aviso", "Selecione ao menos uma tarefa.")
             return
 
-        context = build_context(gui_inputs, {})
+        selected_profile = self.get_profile_by_name(self.profile_var.get()) or {}
+        context = build_context(gui_inputs, selected_profile)
         self.btn_run.configure(state="disabled")
         self.controller.update_log(f"Modo de execucao: {self.mode_var.get()}")
 
